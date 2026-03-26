@@ -2,19 +2,43 @@ package blockchain
 
 import (
 	"errors"
+	"log"
 	"sync"
 )
 
-type Blockchain struct {
-	Blocks []Block
-	Mutex  sync.Mutex
+type Storage interface {
+	SaveBlock(b Block) error
+	LoadBlocks() ([]Block, error)
 }
 
-func NewBlockchain() *Blockchain {
-	genesisBlock := NewBlock(0, []Transaction{}, "0")
-	return &Blockchain{
-		Blocks: []Block{*genesisBlock},
+type Blockchain struct {
+	Blocks  []Block
+	Mutex   sync.Mutex
+	Storage Storage
+}
+
+func NewBlockchain(storage Storage) *Blockchain {
+	bc := &Blockchain{
+		Storage: storage,
 	}
+
+	if storage != nil {
+		blocks, err := storage.LoadBlocks()
+		if err == nil && len(blocks) > 0 {
+			log.Printf("[Blockchain] Carregados %d blocos existentes do DB\n", len(blocks))
+			bc.Blocks = blocks
+			return bc
+		}
+	}
+
+	genesisBlock := NewBlock(0, []Transaction{}, "0")
+	bc.Blocks = []Block{*genesisBlock}
+
+	if storage != nil {
+		storage.SaveBlock(*genesisBlock)
+	}
+
+	return bc
 }
 
 func (bc *Blockchain) AddBlock(b Block) error {
@@ -23,14 +47,23 @@ func (bc *Blockchain) AddBlock(b Block) error {
 
 	lastBlock := bc.Blocks[len(bc.Blocks)-1]
 	if b.PrevHash != lastBlock.Hash {
-		return errors.New("invalid previous hash")
+		return errors.New("hash anterior inválido")
 	}
 
 	if b.CalculateHash() != b.Hash {
-		return errors.New("invalid hash")
+		return errors.New("hash inválido")
 	}
 
 	bc.Blocks = append(bc.Blocks, b)
+
+	if bc.Storage != nil {
+		err := bc.Storage.SaveBlock(b)
+		if err != nil {
+			log.Printf("[Blockchain] Erro ao salvar bloco no DB: %v\n", err)
+			return err
+		}
+	}
+
 	return nil
 }
 

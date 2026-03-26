@@ -3,21 +3,23 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/Igor-Schmidt/blockchain_sistemasDistribuidos/pkg/blockchain"
-	"github.com/Igor-Schmidt/blockchain_sistemasDistribuidos/pkg/bully"
-	"github.com/Igor-Schmidt/blockchain_sistemasDistribuidos/pkg/network"
 	"log"
 	"net"
 	"net/rpc"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Igor-Schmidt/blockchain_sistemasDistribuidos/pkg/blockchain"
+	"github.com/Igor-Schmidt/blockchain_sistemasDistribuidos/pkg/bully"
+	"github.com/Igor-Schmidt/blockchain_sistemasDistribuidos/pkg/database"
+	"github.com/Igor-Schmidt/blockchain_sistemasDistribuidos/pkg/network"
 )
 
 func main() {
-	id := flag.Int("id", 1, "Node ID")
-	port := flag.String("port", "8001", "Node Port")
-	peersStr := flag.String("peers", "", "Comma separated list of id:port")
+	id := flag.Int("id", 1, "ID do Nó")
+	port := flag.String("port", "8001", "Porta do Nó")
+	peersStr := flag.String("peers", "", "Lista de id:porta separada por vírgulas")
 	flag.Parse()
 
 	peers := make(map[int]string)
@@ -32,7 +34,21 @@ func main() {
 	}
 
 	node := bully.NewNode(*id, *port, peers)
-	bc := blockchain.NewBlockchain()
+
+	db, err := database.NewMariaDB(*id, "root", "123456", "127.0.0.1", "3306")
+	if err != nil {
+		log.Printf("[Nó %d] Aviso: falha ao conectar ao MariaDB: %v. Rodando apenas em memória.\n", *id, err)
+		db = nil
+	} else {
+		defer db.Close()
+	}
+
+	var storage blockchain.Storage
+	if db != nil {
+		storage = db
+	}
+
+	bc := blockchain.NewBlockchain(storage)
 	handler := &network.RPCHandler{
 		Node:       node,
 		Blockchain: bc,
@@ -41,10 +57,10 @@ func main() {
 	rpc.Register(handler)
 	ln, err := net.Listen("tcp", ":"+*port)
 	if err != nil {
-		log.Fatalf("Error listening on port %s: %v", *port, err)
+		log.Fatalf("Erro ao ouvir na porta %s: %v", *port, err)
 	}
 
-	log.Printf("[Node %d] Listening on port %s\n", *id, *port)
+	log.Printf("[Nó %d] Ouvindo na porta %s\n", *id, *port)
 
 	go func() {
 		for {
@@ -52,30 +68,30 @@ func main() {
 		}
 	}()
 
-	// Initial delay to let all nodes start
+	// Atraso inicial para permitir que todos os nós iniciem
 	time.Sleep(5 * time.Second)
 
-	// Check leader periodically
+	// Verifica o líder periodicamente
 	go func() {
 		for {
 			time.Sleep(10 * time.Second)
 			leaderID := node.GetLeader()
 			if leaderID == -1 {
-				log.Printf("[Node %d] No leader, starting election...\n", *id)
+				log.Printf("[Nó %d] Sem líder, iniciando eleição...\n", *id)
 				handler.StartElection()
 			} else if leaderID != *id {
-				// Check if leader is alive
+				// Verifica se o líder está vivo
 				port := peers[leaderID]
 				client, err := rpc.Dial("tcp", "localhost:"+port)
 				if err != nil {
-					log.Printf("[Node %d] Leader %d is down, starting election...\n", *id, leaderID)
+					log.Printf("[Nó %d] Líder %d está fora do ar, iniciando eleição...\n", *id, leaderID)
 					node.SetLeader(-1)
 					handler.StartElection()
 				} else {
 					var reply bool
 					err = client.Call("RPCHandler.Heartbeat", true, &reply)
 					if err != nil {
-						log.Printf("[Node %d] Pulse failure for leader %d, starting election...\n", *id, leaderID)
+						log.Printf("[Nó %d] Falha de pulso para o líder %d, iniciando eleição...\n", *id, leaderID)
 						node.SetLeader(-1)
 						handler.StartElection()
 					}
@@ -85,8 +101,8 @@ func main() {
 		}
 	}()
 
-	// Keep main alive
-	fmt.Printf("[Node %d] Running. Press Enter to exit.\n", *id)
+	// Mantém o programa principal ativo
+	fmt.Printf("[Nó %d] Rodando. Pressione Enter para sair.\n", *id)
 	var input string
 	fmt.Scanln(&input)
 }
