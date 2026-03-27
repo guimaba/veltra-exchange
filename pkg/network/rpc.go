@@ -12,7 +12,7 @@ type RPCHandler struct {
 	Blockchain *blockchain.Blockchain
 }
 
-// Bully RPC Methods
+// Métodos RPC do Bully
 type ElectionArgs struct {
 	FromID int
 }
@@ -22,25 +22,25 @@ type ElectionReply struct {
 }
 
 func (h *RPCHandler) Elect(args ElectionArgs, reply *ElectionReply) error {
-	log.Printf("[Node %d] Received ELECTION from %d\n", h.Node.ID, args.FromID)
+	log.Printf("[Nó %d] Recebeu ELEIÇÃO de %d\n", h.Node.ID, args.FromID)
 	reply.OK = true
-	// Start own election because we have a higher ID than the sender
+	// Inicia própria eleição porque temos ID maior que o remetente
 	go h.StartElection() 
 	return nil
 }
 
 func (h *RPCHandler) Coordinator(args ElectionArgs, reply *ElectionReply) error {
-	log.Printf("[Node %d] New Coordinator is %d\n", h.Node.ID, args.FromID)
+	log.Printf("[Nó %d] Novo Coordenador é %d\n", h.Node.ID, args.FromID)
 	h.Node.SetLeader(args.FromID)
 	return nil
 }
 
-// Blockchain RPC Methods
+// Métodos RPC da Blockchain
 func (h *RPCHandler) ReceiveBlock(block blockchain.Block, reply *bool) error {
-	log.Printf("[Node %d] Received new block #%d\n", h.Node.ID, block.Index)
+	log.Printf("[Nó %d] Recebeu novo bloco #%d\n", h.Node.ID, block.Index)
 	err := h.Blockchain.AddBlock(block)
 	if err != nil {
-		log.Printf("[Node %d] Error adding block: %v\n", h.Node.ID, err)
+		log.Printf("[Nó %d] Erro ao adicionar bloco: %v\n", h.Node.ID, err)
 		*reply = false
 		return err
 	}
@@ -49,10 +49,10 @@ func (h *RPCHandler) ReceiveBlock(block blockchain.Block, reply *bool) error {
 }
 
 func (h *RPCHandler) ReceiveTransaction(tx blockchain.Transaction, reply *bool) error {
-	log.Printf("[Node %d] Received transaction from %s to %s\n", h.Node.ID, tx.Sender, tx.Receiver)
-	// If leader, should mine a block. For MVP, we'll just log it.
+	log.Printf("[Nó %d] Recebeu transação de %s para %s\n", h.Node.ID, tx.Sender, tx.Receiver)
+	// Se for líder, deve minerar um bloco. Para o MVP, apenas logamos.
 	if h.Node.IsLeader() {
-		// Mine logic would go here
+		// Lógica de mineração iria aqui
 	}
 	*reply = true
 	return nil
@@ -63,7 +63,7 @@ func (h *RPCHandler) Heartbeat(args bool, reply *bool) error {
 	return nil
 }
 
-// StartElection implements the Bully logic
+// StartElection implementa a lógica do Bully
 func (h *RPCHandler) StartElection() {
 	h.Node.SetState(bully.StateElection)
 	higherPeers := h.Node.GetPeersHigherThan(h.Node.ID)
@@ -93,7 +93,7 @@ func (h *RPCHandler) StartElection() {
 }
 
 func (h *RPCHandler) ProclaimCoordinator() {
-	log.Printf("[Node %d] I am the new coordinator!\n", h.Node.ID)
+	log.Printf("[Nó %d] Eu sou o novo coordenador!\n", h.Node.ID)
 	h.Node.SetLeader(h.Node.ID)
 	for peerID, port := range h.Node.Peers {
 		if peerID == h.Node.ID {
