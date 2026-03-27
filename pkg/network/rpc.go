@@ -37,7 +37,7 @@ func (h *RPCHandler) Coordinator(args ElectionArgs, reply *ElectionReply) error 
 
 // Métodos RPC da Blockchain
 func (h *RPCHandler) ReceiveBlock(block blockchain.Block, reply *bool) error {
-	log.Printf("[Nó %d] Recebeu novo bloco #%d\n", h.Node.ID, block.Index)
+	log.Printf("[Cada Nó: %d] Recebeu novo bloco #%d. Iniciando validação e salvamento...\n", h.Node.ID, block.Index)
 	err := h.Blockchain.AddBlock(block)
 	if err != nil {
 		log.Printf("[Nó %d] Erro ao adicionar bloco: %v\n", h.Node.ID, err)
@@ -64,6 +64,7 @@ func (h *RPCHandler) ReceiveTransaction(tx blockchain.Transaction, reply *bool) 
 			}
 			
 			// Propagar bloco minerado para todos os peers da rede
+			log.Printf("[2. Coordenador %d] Enviando bloco #%d para todos os outros nós da rede...\n", h.Node.ID, newBlock.Index)
 			for peerID, port := range h.Node.Peers {
 				if peerID == h.Node.ID {
 					continue
@@ -84,6 +85,22 @@ func (h *RPCHandler) ReceiveTransaction(tx blockchain.Transaction, reply *bool) 
 
 func (h *RPCHandler) Heartbeat(args bool, reply *bool) error {
 	*reply = true
+	return nil
+}
+
+func (h *RPCHandler) GetCoordinator(args bool, leaderPort *string) error {
+	leaderID := h.Node.GetLeader()
+	
+	if leaderID == h.Node.ID {
+		*leaderPort = h.Node.Port
+	} else {
+		port, exists := h.Node.Peers[leaderID]
+		if exists {
+			*leaderPort = port
+		} else {
+			*leaderPort = ""
+		}
+	}
 	return nil
 }
 

@@ -9,11 +9,31 @@ import (
 )
 
 func main() {
-	// No simulate.ps1, o Nó 3 (porta 8003) geralmente se torna o líder rapidamente devido ao maior ID
-	client, err := rpc.Dial("tcp", "localhost:8003")
-	if err != nil {
-		log.Fatalf("Erro conectando ao Nó da porta 8003: %v\nTentando conectar a outro? Altere a porta no test_tx.go", err)
+	ports := []string{"8001", "8002", "8003"}
+	var coordinatorPort string
+
+	// Tenta descobrir o coordenador a partir de qualquer nó ativo
+	for _, port := range ports {
+		client, err := rpc.Dial("tcp", "localhost:"+port)
+		if err == nil {
+			err = client.Call("RPCHandler.GetCoordinator", true, &coordinatorPort)
+			client.Close()
+			if err == nil && coordinatorPort != "" {
+				fmt.Printf("Coordenador encontrado na porta: %s (informado pelo nó %s)\n", coordinatorPort, port)
+				break
+			}
+		}
 	}
+
+	if coordinatorPort == "" {
+		log.Fatalf("Erro: Não foi possível encontrar o coordenador na rede.")
+	}
+
+	client, err := rpc.Dial("tcp", "localhost:"+coordinatorPort)
+	if err != nil {
+		log.Fatalf("Erro conectando ao Coordenador na porta %s: %v", coordinatorPort, err)
+	}
+	defer client.Close()
 
 	tx := blockchain.Transaction{
 		Sender:   "Alice",
@@ -27,6 +47,6 @@ func main() {
 		log.Fatalf("Erro ao enviar transação: %v", err)
 	}
 
-	fmt.Printf("Transação enviada com sucesso ao Nó! Resposta da propagação: %v\n", reply)
-	fmt.Println("Cheque os logs dos terminais (especialmente do Nó 3) para ver a mineração acontecendo!")
+	fmt.Printf("Transação enviada com sucesso ao Coordenador (Porta %s)! Resposta da propagação: %v\n", coordinatorPort, reply)
+	fmt.Println("Cheque os logs do coordenador para ver a mineração acontecendo!")
 }
