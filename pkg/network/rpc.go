@@ -1,8 +1,8 @@
 package network
 
 import (
-	"github.com/Igor-Schmidt/blockchain_sistemasDistribuidos/pkg/blockchain"
-	"github.com/Igor-Schmidt/blockchain_sistemasDistribuidos/pkg/bully"
+	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/blockchain"
+	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/bully"
 	"log"
 	"net/rpc"
 )
@@ -49,10 +49,34 @@ func (h *RPCHandler) ReceiveBlock(block blockchain.Block, reply *bool) error {
 }
 
 func (h *RPCHandler) ReceiveTransaction(tx blockchain.Transaction, reply *bool) error {
-	log.Printf("[Nó %d] Recebeu transação de %s para %s\n", h.Node.ID, tx.Sender, tx.Receiver)
-	// Se for líder, deve minerar um bloco. Para o MVP, apenas logamos.
+	log.Printf("[Nó %d] Recebeu transação de %s para %s no valor de %.2f\n", h.Node.ID, tx.Sender, tx.Receiver, tx.Amount)
+	
+	h.Blockchain.AddTransactionToPool(tx)
+
+	// Se for líder, processa a mineração do novo bloco
 	if h.Node.IsLeader() {
-		// Lógica de mineração iria aqui
+		go func() {
+			// Usamos uma dificuldade baixa (ex: 3) para permitir testes rápidos locais
+			newBlock, err := h.Blockchain.MinePendingTransactions(3)
+			if err != nil {
+				log.Printf("[Nó %d] Erro na mineração do Líder: %v\n", h.Node.ID, err)
+				return
+			}
+			
+			// Propagar bloco minerado para todos os peers da rede
+			for peerID, port := range h.Node.Peers {
+				if peerID == h.Node.ID {
+					continue
+				}
+				client, err := rpc.Dial("tcp", "localhost:"+port)
+				if err != nil {
+					continue
+				}
+				var replyReceive bool
+				client.Call("RPCHandler.ReceiveBlock", *newBlock, &replyReceive)
+				client.Close()
+			}
+		}()
 	}
 	*reply = true
 	return nil

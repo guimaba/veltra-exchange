@@ -1,4 +1,4 @@
-module github.com/Igor-Schmidt/blockchain_sistemasDistribuidos
+module github.com/guimaba/blockchain_sistemasDistribuidos
 
 go 1.26.1
 
