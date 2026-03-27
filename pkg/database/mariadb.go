@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/Igor-Schmidt/blockchain_sistemasDistribuidos/pkg/blockchain"
+	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/blockchain"
 	_ "github.com/go-sql-driver/mysql"
 )
 

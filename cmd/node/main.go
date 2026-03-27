@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Igor-Schmidt/blockchain_sistemasDistribuidos/pkg/blockchain"
-	"github.com/Igor-Schmidt/blockchain_sistemasDistribuidos/pkg/bully"
-	"github.com/Igor-Schmidt/blockchain_sistemasDistribuidos/pkg/database"
-	"github.com/Igor-Schmidt/blockchain_sistemasDistribuidos/pkg/network"
+	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/blockchain"
+	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/bully"
+	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/database"
+	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/network"
 )
 
 func main() {
