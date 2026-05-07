@@ -6,19 +6,20 @@
 # Imagem final ~30 MB.
 
 # ---------- Stage 1: build do Flutter Web ----------
-FROM ghcr.io/cirruslabs/flutter:3.19.6 AS flutter-builder
+FROM ghcr.io/cirruslabs/flutter:3.24.5 AS flutter-builder
 
 WORKDIR /app
 
-# Copia apenas o pubspec primeiro para cache de dependências
-COPY web/pubspec.yaml web/pubspec.lock ./
+# Copia o pubspec primeiro para cache de dependencias.
+# pubspec.lock e gerado pelo pub get; copiamos so se existir.
+COPY web/pubspec.yaml ./
 RUN flutter pub get
 
-# Copia o restante do código Flutter
+# Copia o restante do codigo Flutter
 COPY web/ ./
 
 # Build em modo release. Output em build/web/
-RUN flutter build web --release --web-renderer canvaskit
+RUN flutter build web --release
 
 # ---------- Stage 2: build do binário Go ----------
 FROM golang:1.26-alpine AS go-builder

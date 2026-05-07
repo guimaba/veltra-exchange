@@ -1,18 +1,19 @@
 # Trabalho Prático — Mensageria com RabbitMQ
 
-Documentação do trabalho prático de mensageria, construído sobre o projeto base de blockchain distribuída.
+Documentação completa do trabalho prático de mensageria, construído sobre o projeto base de blockchain distribuída.
 
 ## Índice
 
-| Etapa | Documento | Pontuação | Prazo |
-|---|---|---|---|
-| 1. Descrição do Cenário | [01_cenario.md](./01_cenario.md) | parte dos 2,5 pts | 08/05 |
-| 2. Arquitetura da Solução | [02_arquitetura.md](./02_arquitetura.md) | parte dos 2,5 pts | 08/05 |
-| Diagramas (1 e 2) | [03_diagramas.md](./03_diagramas.md) | parte dos 2,5 pts | 08/05 |
-| 3. Configuração RabbitMQ | [04_configuracao_rabbitmq.md](./04_configuracao_rabbitmq.md) | parte dos 3,5 pts | 08/05 |
-| 4. Exemplos de Uso | [05_exemplos_uso.md](./05_exemplos_uso.md) | parte dos 3,5 pts | 08/05 |
-| 5. Considerações Técnicas | [06_consideracoes_tecnicas.md](./06_consideracoes_tecnicas.md) | parte dos 3,5 pts | 08/05 |
-| Relatório Final | _(a fazer)_ | 2,5 pts | 08/05 |
+| Documento | Conteúdo |
+|---|---|
+| **[RELATORIO_FINAL.md](./RELATORIO_FINAL.md)** | **Relatório final consolidado — leitura recomendada** |
+| [01_cenario.md](./01_cenario.md) | Etapa 1 — Descrição do Cenário |
+| [02_arquitetura.md](./02_arquitetura.md) | Etapa 2 — Arquitetura da Solução |
+| [03_diagramas.md](./03_diagramas.md) | Diagramas (componentes, sequência, deployment, DLQ) |
+| [04_configuracao_rabbitmq.md](./04_configuracao_rabbitmq.md) | Etapa 3 — Configuração do RabbitMQ |
+| [05_exemplos_uso.md](./05_exemplos_uso.md) | Etapa 4 — Exemplos de Uso |
+| [06_consideracoes_tecnicas.md](./06_consideracoes_tecnicas.md) | Etapa 5 — Considerações Técnicas |
+| [07_roteiro_testes.md](./07_roteiro_testes.md) | Roteiro de testes ponta-a-ponta |
 
 ## Escopo
 
@@ -20,4 +21,4 @@ Documentação do trabalho prático de mensageria, construído sobre o projeto b
 
 ## Como executar
 
-Instruções de execução única (`docker-compose up`) estarão no [README principal do projeto](../../README.md) após a implementação das Etapas 3-5.
+Ver instruções no [README principal do projeto](../../README.md).

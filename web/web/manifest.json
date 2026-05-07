@@ -1,0 +1,11 @@
+{
+  "name": "Blockchain + RabbitMQ",
+  "short_name": "Blockchain",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "description": "Interface web da blockchain distribuida com mensageria RabbitMQ.",
+  "orientation": "portrait-primary",
+  "prefer_related_applications": false
+}
