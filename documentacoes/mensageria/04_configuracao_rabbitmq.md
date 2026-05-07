@@ -38,14 +38,14 @@ Princípio: **menor privilégio possível**. Cada componente tem usuário própr
 | `admin` | `admin` | administrator | `.*` | `.*` | `.*` |
 | `gateway` | `gateway-pw` | – | `^$` | `^blockchain\.commands$` | `^q\.gateway\.events$` |
 | `node` | `node-pw` | – | `^$` | `^blockchain\.events$` | `^q\.leader\.commands$` |
-| `audit` | `audit-pw` | – | `^$` | `^$` | `^q\.audit\.events$` |
+| `audit` | `audit-pw` | – | `^$` | `^blockchain\.(retry\|dlx)$` | `^q\.audit\.events$` |
 
 **Notas:**
 
 - `configure=^$` impede que o usuário crie/destrua exchanges/filas — toda a topologia já vem pré-criada via `definitions.json`. Se o cliente tentar declarar passivamente um recurso que já existe (com mesmos parâmetros), a operação é permitida via `passive=true` no AMQP.
 - `gateway` só pode publicar em `blockchain.commands` e ler `q.gateway.events`. Não consegue acessar comandos do líder nem a DLQ.
 - `node` só publica eventos em `blockchain.events` e consome comandos de `q.leader.commands`. Não tem acesso à fila de auditoria.
-- `audit` é **read-only**: só consome de `q.audit.events`.
+- `audit` consome de `q.audit.events` e pode publicar **apenas** em `blockchain.retry` e `blockchain.dlx` (necessário para reportar falhas técnicas via DLQ — não pode publicar eventos de domínio).
 - Em produção, senhas viriam de secrets (Vault/AWS Secrets Manager). Para o trabalho, ficam em variáveis de ambiente do `docker-compose`.
 
 ---
@@ -268,7 +268,7 @@ Resumo declarativo de toda a topologia. Vai em `docker/rabbitmq/definitions.json
     {"user": "admin",   "vhost": "/blockchain", "configure": ".*", "write": ".*", "read": ".*"},
     {"user": "gateway", "vhost": "/blockchain", "configure": "^$", "write": "^blockchain\\.commands$", "read": "^q\\.gateway\\.events$"},
     {"user": "node",    "vhost": "/blockchain", "configure": "^$", "write": "^blockchain\\.(events|retry|dlx)$", "read": "^q\\.leader\\.commands$"},
-    {"user": "audit",   "vhost": "/blockchain", "configure": "^$", "write": "^$", "read": "^q\\.audit\\.events$"}
+    {"user": "audit",   "vhost": "/blockchain", "configure": "^$", "write": "^blockchain\\.(retry|dlx)$", "read": "^q\\.audit\\.events$"}
   ],
   "exchanges": [
     {"name": "blockchain.commands", "vhost": "/blockchain", "type": "direct", "durable": true, "auto_delete": false, "internal": false, "arguments": {}},

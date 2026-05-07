@@ -68,7 +68,10 @@ services:
       NODE_ID: 1
       NODE_PORT: 8001
       PEERS: "2:node2:8002,3:node3:8003"
-      DB_DSN: "blockchain:blockchain@tcp(mariadb:3306)/blockchain?parseTime=true"
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASS: root
       AMQP_URL: "amqp://node:node-pw@rabbitmq:5672/%2Fblockchain"
     depends_on:
       rabbitmq: { condition: service_healthy }
@@ -84,7 +87,10 @@ services:
       NODE_ID: 2
       NODE_PORT: 8002
       PEERS: "1:node1:8001,3:node3:8003"
-      DB_DSN: "blockchain:blockchain@tcp(mariadb:3306)/blockchain?parseTime=true"
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASS: root
       AMQP_URL: "amqp://node:node-pw@rabbitmq:5672/%2Fblockchain"
     depends_on:
       rabbitmq: { condition: service_healthy }
@@ -100,7 +106,10 @@ services:
       NODE_ID: 3
       NODE_PORT: 8003
       PEERS: "1:node1:8001,2:node2:8002"
-      DB_DSN: "blockchain:blockchain@tcp(mariadb:3306)/blockchain?parseTime=true"
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASS: root
       AMQP_URL: "amqp://node:node-pw@rabbitmq:5672/%2Fblockchain"
     depends_on:
       rabbitmq: { condition: service_healthy }

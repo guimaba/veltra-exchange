@@ -13,7 +13,7 @@
     { "user": "admin",   "vhost": "/blockchain", "configure": ".*", "write": ".*", "read": ".*" },
     { "user": "gateway", "vhost": "/blockchain", "configure": "^$", "write": "^blockchain\\.commands$", "read": "^q\\.gateway\\.events$" },
     { "user": "node",    "vhost": "/blockchain", "configure": "^$", "write": "^blockchain\\.(events|retry|dlx)$", "read": "^q\\.leader\\.commands$" },
-    { "user": "audit",   "vhost": "/blockchain", "configure": "^$", "write": "^$", "read": "^q\\.audit\\.events$" }
+    { "user": "audit",   "vhost": "/blockchain", "configure": "^$", "write": "^blockchain\\.(retry|dlx)$", "read": "^q\\.audit\\.events$" }
   ],
   "policies": [],
   "exchanges": [
