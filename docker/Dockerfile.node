@@ -1,0 +1,40 @@
+# Dockerfile do nó da blockchain.
+# Multi-stage: compila com a imagem golang completa, copia só o binário pra alpine.
+# Imagem final ~20 MB.
+
+# ---------- Stage 1: build ----------
+FROM golang:1.26-alpine AS builder
+
+WORKDIR /src
+
+# Cache de dependências: copia os go.mod/go.sum primeiro
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copia o restante do código-fonte
+COPY cmd/ ./cmd/
+COPY pkg/ ./pkg/
+
+# Build estático (CGO desabilitado para rodar em alpine sem libc dinâmica)
+ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+RUN go build -ldflags="-s -w" -o /out/node ./cmd/node
+
+# ---------- Stage 2: runtime ----------
+FROM alpine:3.19
+
+# Certificados raiz (necessário se o nó fizer HTTPS para algum serviço externo no futuro)
+RUN apk add --no-cache ca-certificates
+
+# Usuário não-root para segurança
+RUN addgroup -S app && adduser -S app -G app
+USER app
+
+WORKDIR /app
+COPY --from=builder /out/node /app/node
+
+# Porta RPC do nó (variável NODE_PORT controla qual número)
+EXPOSE 8001 8002 8003
+
+# O entrypoint usa as variáveis de ambiente (NODE_ID, NODE_PORT, PEERS, DB_DSN, AMQP_URL)
+# que são definidas no docker-compose.yml
+ENTRYPOINT ["/app/node"]

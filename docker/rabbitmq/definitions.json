@@ -1,0 +1,86 @@
+{
+  "rabbit_version": "3.12.0",
+  "users": [
+    { "name": "admin",   "password": "admin",      "tags": ["administrator"] },
+    { "name": "gateway", "password": "gateway-pw", "tags": [] },
+    { "name": "node",    "password": "node-pw",    "tags": [] },
+    { "name": "audit",   "password": "audit-pw",   "tags": [] }
+  ],
+  "vhosts": [
+    { "name": "/blockchain" }
+  ],
+  "permissions": [
+    { "user": "admin",   "vhost": "/blockchain", "configure": ".*", "write": ".*", "read": ".*" },
+    { "user": "gateway", "vhost": "/blockchain", "configure": "^$", "write": "^blockchain\\.commands$", "read": "^q\\.gateway\\.events$" },
+    { "user": "node",    "vhost": "/blockchain", "configure": "^$", "write": "^blockchain\\.(events|retry|dlx)$", "read": "^q\\.leader\\.commands$" },
+    { "user": "audit",   "vhost": "/blockchain", "configure": "^$", "write": "^$", "read": "^q\\.audit\\.events$" }
+  ],
+  "policies": [],
+  "exchanges": [
+    { "name": "blockchain.commands", "vhost": "/blockchain", "type": "direct", "durable": true, "auto_delete": false, "internal": false, "arguments": {} },
+    { "name": "blockchain.events",   "vhost": "/blockchain", "type": "topic",  "durable": true, "auto_delete": false, "internal": false, "arguments": {} },
+    { "name": "blockchain.dlx",      "vhost": "/blockchain", "type": "fanout", "durable": true, "auto_delete": false, "internal": false, "arguments": {} },
+    { "name": "blockchain.retry",    "vhost": "/blockchain", "type": "direct", "durable": true, "auto_delete": false, "internal": true,  "arguments": {} }
+  ],
+  "queues": [
+    {
+      "name": "q.leader.commands",
+      "vhost": "/blockchain",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 60000,
+        "x-dead-letter-exchange": "blockchain.dlx",
+        "x-max-length": 10000,
+        "x-overflow": "reject-publish"
+      }
+    },
+    {
+      "name": "q.gateway.events",
+      "vhost": "/blockchain",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-max-length": 5000,
+        "x-overflow": "drop-head"
+      }
+    },
+    {
+      "name": "q.audit.events",
+      "vhost": "/blockchain",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 86400000
+      }
+    },
+    {
+      "name": "q.dlq",
+      "vhost": "/blockchain",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 604800000
+      }
+    },
+    {
+      "name": "q.retry.5s",
+      "vhost": "/blockchain",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 5000,
+        "x-dead-letter-exchange": "blockchain.commands"
+      }
+    }
+  ],
+  "bindings": [
+    { "source": "blockchain.commands", "vhost": "/blockchain", "destination": "q.leader.commands", "destination_type": "queue", "routing_key": "credit.requested",      "arguments": {} },
+    { "source": "blockchain.commands", "vhost": "/blockchain", "destination": "q.leader.commands", "destination_type": "queue", "routing_key": "transaction.requested", "arguments": {} },
+    { "source": "blockchain.events",   "vhost": "/blockchain", "destination": "q.gateway.events",  "destination_type": "queue", "routing_key": "#", "arguments": {} },
+    { "source": "blockchain.events",   "vhost": "/blockchain", "destination": "q.audit.events",    "destination_type": "queue", "routing_key": "#", "arguments": {} },
+    { "source": "blockchain.dlx",      "vhost": "/blockchain", "destination": "q.dlq",             "destination_type": "queue", "routing_key": "",  "arguments": {} },
+    { "source": "blockchain.retry",    "vhost": "/blockchain", "destination": "q.retry.5s",        "destination_type": "queue", "routing_key": "credit.requested",      "arguments": {} },
+    { "source": "blockchain.retry",    "vhost": "/blockchain", "destination": "q.retry.5s",        "destination_type": "queue", "routing_key": "transaction.requested", "arguments": {} }
+  ]
+}

@@ -1,0 +1,20 @@
+# Não enviar ao Docker daemon — acelera build e reduz tamanho do contexto.
+
+.git
+.gitignore
+.vscode
+.idea
+*.md
+documentacoes/
+readmes/
+simulate.ps1
+test_tx.go
+testdb.go
+
+# Artefatos locais
+node_modules/
+web/build/
+web/.dart_tool/
+web/.flutter-plugins
+web/.flutter-plugins-dependencies
+*.log
