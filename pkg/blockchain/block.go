@@ -7,10 +7,22 @@ import (
 	"time"
 )
 
+// TransactionKind distingue lancamentos de credito (deposito simulado, sem
+// remetente) de transferencias entre contas. Evita ambiguidade quando Sender
+// vem vazio.
+type TransactionKind string
+
+const (
+	KindCredit   TransactionKind = "credit"
+	KindTransfer TransactionKind = "transfer"
+)
+
 type Transaction struct {
-	Sender   string  `json:"sender"`
-	Receiver string  `json:"receiver"`
-	Amount   float64 `json:"amount"`
+	TxID     string          `json:"tx_id,omitempty"`
+	Sender   string          `json:"sender"`
+	Receiver string          `json:"receiver"`
+	Amount   float64         `json:"amount"`
+	Kind     TransactionKind `json:"kind,omitempty"`
 }
 
 type Block struct {

@@ -1,0 +1,163 @@
+# Orquestração completa do sistema (Etapa de Mensageria).
+# Sobe: 3 nós blockchain + MariaDB + RabbitMQ + gateway + auditoria.
+# Uso: docker compose up --build
+# Acesso:
+#   - Aplicação Flutter Web ......... http://localhost:8080
+#   - API REST do gateway ........... http://localhost:8080/api
+#   - WebSocket de eventos .......... ws://localhost:8080/ws
+#   - Painel RabbitMQ Management .... http://localhost:15672  (admin / admin)
+
+services:
+  # -------------------------------------------------------------
+  # Infra: RabbitMQ
+  # -------------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: blockchain-rabbitmq
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+      RABBITMQ_DEFAULT_VHOST: /blockchain
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # UI Management
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+      - ./docker/rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - ./docker/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [blockchain-net]
+
+  # -------------------------------------------------------------
+  # Infra: MariaDB
+  # -------------------------------------------------------------
+  mariadb:
+    image: mariadb:10.11
+    container_name: blockchain-mariadb
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: blockchain
+      MARIADB_USER: blockchain
+      MARIADB_PASSWORD: blockchain
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      - ./docker/mariadb/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [blockchain-net]
+
+  # -------------------------------------------------------------
+  # Aplicação: 3 nós da blockchain
+  # -------------------------------------------------------------
+  node1:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    container_name: blockchain-node1
+    environment:
+      NODE_ID: 1
+      NODE_PORT: 8001
+      PEERS: "2:node2:8002,3:node3:8003"
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASS: root
+      AMQP_URL: "amqp://node:node-pw@rabbitmq:5672/%2Fblockchain"
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      mariadb:  { condition: service_healthy }
+    networks: [blockchain-net]
+
+  node2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    container_name: blockchain-node2
+    environment:
+      NODE_ID: 2
+      NODE_PORT: 8002
+      PEERS: "1:node1:8001,3:node3:8003"
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASS: root
+      AMQP_URL: "amqp://node:node-pw@rabbitmq:5672/%2Fblockchain"
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      mariadb:  { condition: service_healthy }
+    networks: [blockchain-net]
+
+  node3:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.node
+    container_name: blockchain-node3
+    environment:
+      NODE_ID: 3
+      NODE_PORT: 8003
+      PEERS: "1:node1:8001,2:node2:8002"
+      DB_HOST: mariadb
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASS: root
+      AMQP_URL: "amqp://node:node-pw@rabbitmq:5672/%2Fblockchain"
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      mariadb:  { condition: service_healthy }
+    networks: [blockchain-net]
+
+  # -------------------------------------------------------------
+  # Aplicação: Gateway HTTP/WS + serve Flutter Web estático
+  # -------------------------------------------------------------
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.gateway
+    container_name: blockchain-gateway
+    environment:
+      GATEWAY_PORT: 8080
+      AMQP_URL: "amqp://gateway:gateway-pw@rabbitmq:5672/%2Fblockchain"
+      DB_DSN: "blockchain:blockchain@tcp(mariadb:3306)/blockchain?parseTime=true"
+    ports:
+      - "8080:8080"
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      mariadb:  { condition: service_healthy }
+    networks: [blockchain-net]
+
+  # -------------------------------------------------------------
+  # Aplicação: Serviço de Auditoria (consome todos os eventos)
+  # -------------------------------------------------------------
+  audit:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.audit
+    container_name: blockchain-audit
+    environment:
+      AMQP_URL: "amqp://audit:audit-pw@rabbitmq:5672/%2Fblockchain"
+      DB_DSN: "blockchain:blockchain@tcp(mariadb:3306)/blockchain?parseTime=true"
+    depends_on:
+      rabbitmq: { condition: service_healthy }
+      mariadb:  { condition: service_healthy }
+    networks: [blockchain-net]
+
+# -------------------------------------------------------------
+# Recursos compartilhados
+# -------------------------------------------------------------
+volumes:
+  rabbitmq-data:
+  mariadb-data:
+
+networks:
+  blockchain-net:
+    driver: bridge

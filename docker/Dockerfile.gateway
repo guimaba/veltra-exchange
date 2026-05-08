@@ -1,0 +1,57 @@
+# Dockerfile do gateway HTTP/WebSocket.
+# 3 stages:
+#   1. flutter-builder: compila o Flutter Web em HTML/JS/CSS estático
+#   2. go-builder:      compila o binário Go do gateway
+#   3. runtime:         alpine com o binário + os assets estáticos do Flutter
+# Imagem final ~30 MB.
+
+# ---------- Stage 1: build do Flutter Web ----------
+FROM ghcr.io/cirruslabs/flutter:3.24.5 AS flutter-builder
+
+WORKDIR /app
+
+# Copia o pubspec primeiro para cache de dependencias.
+# pubspec.lock e gerado pelo pub get; copiamos so se existir.
+COPY web/pubspec.yaml ./
+RUN flutter pub get
+
+# Copia o restante do codigo Flutter
+COPY web/ ./
+
+# Build em modo release. Output em build/web/
+RUN flutter build web --release
+
+# ---------- Stage 2: build do binário Go ----------
+FROM golang:1.24-alpine AS go-builder
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd/ ./cmd/
+COPY pkg/ ./pkg/
+
+ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+RUN go build -ldflags="-s -w" -o /out/gateway ./cmd/gateway
+
+# ---------- Stage 3: runtime ----------
+FROM alpine:3.19
+
+RUN apk add --no-cache ca-certificates
+
+RUN addgroup -S app && adduser -S app -G app
+USER app
+
+WORKDIR /app
+
+# Binário do gateway
+COPY --from=go-builder /out/gateway /app/gateway
+
+# Assets estáticos do Flutter (servidos em GET / pelo gateway)
+COPY --from=flutter-builder /app/build/web /app/static
+
+EXPOSE 8080
+
+ENV STATIC_DIR=/app/static
+ENTRYPOINT ["/app/gateway"]

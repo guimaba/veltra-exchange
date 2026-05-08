@@ -112,6 +112,62 @@ func (bc *Blockchain) AddTransactionToPool(tx Transaction) {
 	log.Printf("[Blockchain] Transação adicionada à MemPool local. Total pendente: %d\n", len(bc.MemPool))
 }
 
+// GetBalance calcula o saldo de uma conta a partir do ledger:
+// soma de creditos recebidos - soma de debitos enviados, considerando tanto
+// blocos confirmados quanto transacoes pendentes na MemPool.
+//
+// Para creditos (Kind=credit, Sender vazio), conta apenas como entrada para o
+// Receiver. Para transferencias, debita o Sender e credita o Receiver.
+func (bc *Blockchain) GetBalance(account string) float64 {
+	bc.Mutex.Lock()
+	defer bc.Mutex.Unlock()
+
+	var balance float64
+	apply := func(tx Transaction) {
+		if tx.Receiver == account {
+			balance += tx.Amount
+		}
+		if tx.Sender == account && tx.Sender != "" {
+			balance -= tx.Amount
+		}
+	}
+
+	for _, b := range bc.Blocks {
+		for _, tx := range b.Transactions {
+			apply(tx)
+		}
+	}
+	for _, tx := range bc.MemPool {
+		apply(tx)
+	}
+	return balance
+}
+
+// HasTransaction retorna true se uma transacao com este TxID ja foi vista
+// (em bloco confirmado ou na MemPool). Usado para idempotencia no consumer
+// do lider.
+func (bc *Blockchain) HasTransaction(txID string) bool {
+	if txID == "" {
+		return false
+	}
+	bc.Mutex.Lock()
+	defer bc.Mutex.Unlock()
+
+	for _, b := range bc.Blocks {
+		for _, tx := range b.Transactions {
+			if tx.TxID == txID {
+				return true
+			}
+		}
+	}
+	for _, tx := range bc.MemPool {
+		if tx.TxID == txID {
+			return true
+		}
+	}
+	return false
+}
+
 func (bc *Blockchain) MinePendingTransactions(difficulty int) (*Block, error) {
 	bc.Mutex.Lock()
 	defer bc.Mutex.Unlock()
