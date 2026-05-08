@@ -34,6 +34,9 @@ func NewBlockchain(storage Storage) *Blockchain {
 	}
 
 	genesisBlock := NewBlock(0, []Transaction{}, "0")
+	genesisBlock.Timestamp = 0 // Fixar timestamp para garantir o mesmo Hash em todos os nós
+	genesisBlock.Hash = genesisBlock.CalculateHash()
+	
 	bc.Blocks = []Block{*genesisBlock}
 
 	if storage != nil {
@@ -48,23 +51,37 @@ func (bc *Blockchain) AddBlock(b Block) error {
 	defer bc.Mutex.Unlock()
 
 	lastBlock := bc.Blocks[len(bc.Blocks)-1]
+	
+	log.Printf("[Blockchain] Validando bloco #%d...", b.Index)
+	
+	if b.Index != lastBlock.Index+1 {
+		return errors.New("índice do bloco inválido ou fora de ordem")
+	}
+
 	if b.PrevHash != lastBlock.Hash {
 		return errors.New("hash anterior inválido")
 	}
 
 	if b.CalculateHash() != b.Hash {
-		return errors.New("hash inválido")
+		return errors.New("hash inválido ou corrompido")
 	}
 
+	log.Printf("[Blockchain] Bloco #%d validado com sucesso (Hash: %s).", b.Index, b.Hash)
 	bc.Blocks = append(bc.Blocks, b)
 
 	if bc.Storage != nil {
+		log.Printf("[Blockchain] Salvando bloco #%d no banco de dados local...", b.Index)
 		err := bc.Storage.SaveBlock(b)
 		if err != nil {
 			log.Printf("[Blockchain] Erro ao salvar bloco no DB: %v\n", err)
 			return err
 		}
+		log.Printf("[Blockchain] Bloco #%d salvo no DB com sucesso.", b.Index)
 	}
+
+	// Limpa a MemPool local das transações que foram incluídas no bloco
+	// Como simplificação, estamos limpando a mempool inteira
+	bc.MemPool = []Transaction{}
 
 	return nil
 }
@@ -165,9 +182,9 @@ func (bc *Blockchain) MinePendingTransactions(difficulty int) (*Block, error) {
 	newBlock := NewBlock(lastBlock.Index+1, bc.MemPool, lastBlock.Hash)
 
 	// Inicia a Prova de Trabalho
-	log.Printf("[Blockchain] Iniciando mineração do bloco %d com %d transações (Dificuldade: %d)...\n", newBlock.Index, len(bc.MemPool), difficulty)
+	log.Printf("[1. Coordenador] Criando bloco #%d com %d transações e calculando hash (Dificuldade: %d)...\n", newBlock.Index, len(bc.MemPool), difficulty)
 	newBlock.Mine(difficulty)
-	log.Printf("[Blockchain] Bloco %d minerado com sucesso! Hash: %s\n", newBlock.Index, newBlock.Hash)
+	log.Printf("[1. Coordenador] Bloco #%d criado e hash calculado com sucesso! Hash: %s\n", newBlock.Index, newBlock.Hash)
 
 	// Valida integridade do hash do bloco anterior
 	if newBlock.PrevHash != lastBlock.Hash {
