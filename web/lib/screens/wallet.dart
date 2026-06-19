@@ -1,184 +1,414 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
-import '../api.dart';
-import '../state.dart';
+import '../auth_state.dart';
+import '../balance_state.dart';
+import '../market_state.dart';
+import '../theme.dart';
+import '../trading_state.dart';
+import 'deposit.dart';
 
-class WalletScreen extends StatefulWidget {
+class WalletScreen extends StatelessWidget {
   const WalletScreen();
 
   @override
-  State<WalletScreen> createState() => _WalletScreenState();
+  Widget build(BuildContext context) {
+    final auth    = context.watch<AuthState>();
+    final bal     = context.watch<BalanceState>();
+    final market  = context.watch<MarketState>();
+    final trading = context.watch<TradingState>();
+    final username = auth.user?.username ?? '';
+
+    // Calcula portfolio total em BRL
+    double totalBRL = 0;
+    for (final b in bal.nonZero) {
+      final coin = market.coins.where((c) => c.symbol == b.asset).firstOrNull;
+      if (coin != null) {
+        totalBRL += b.balanceDecimal * coin.priceBRL;
+      } else if (b.asset == 'USDT-sim') {
+        totalBRL += b.balanceDecimal * 5.0;
+      }
+    }
+
+    return RefreshIndicator(
+      color: kBrand,
+      backgroundColor: kSurface2,
+      onRefresh: () => bal.refresh(),
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          _PortfolioHeader(username: username, totalBRL: totalBRL, balances: bal.nonZero, market: market),
+          const SizedBox(height: 14),
+
+          // Botão Depositar
+          _DepositButton(),
+          const SizedBox(height: 20),
+
+          // Assets
+          if (bal.loading && bal.nonZero.isEmpty)
+            const Center(child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 40),
+              child: CircularProgressIndicator(color: kBrand, strokeWidth: 2),
+            ))
+          else if (bal.nonZero.isEmpty)
+            _EmptyWallet()
+          else ...[
+            const _SectionHeader(title: 'Seus ativos'),
+            const SizedBox(height: 8),
+            _AssetGrid(balances: bal.nonZero, market: market),
+          ],
+
+          const SizedBox(height: 24),
+          _SectionHeader(title: 'Ordens abertas', badge: '${trading.openOrders.length}'),
+          const SizedBox(height: 8),
+          _OpenOrdersCard(),
+
+          const SizedBox(height: 24),
+          const _SectionHeader(title: 'Últimos trades'),
+          const SizedBox(height: 8),
+          _TradesCard(),
+        ]),
+      ),
+    );
+  }
 }
 
-class _WalletScreenState extends State<WalletScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _accountCtrl = TextEditingController();
-  final _amountCtrl = TextEditingController(text: '100');
-  bool _busy = false;
+// ─── Portfolio header ─────────────────────────────────────────────────────────
+
+class _PortfolioHeader extends StatelessWidget {
+  final String username;
+  final double totalBRL;
+  final List<AssetBalance> balances;
+  final MarketState market;
+  const _PortfolioHeader({required this.username, required this.totalBRL,
+      required this.balances, required this.market});
 
   @override
-  void dispose() {
-    _accountCtrl.dispose();
-    _amountCtrl.dispose();
-    super.dispose();
-  }
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.all(20),
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(16),
+      gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight,
+          colors: [kBrand2.withOpacity(0.3), kBrand.withOpacity(0.15)]),
+      border: Border.all(color: kBrand.withOpacity(0.3)),
+      boxShadow: [BoxShadow(color: kBrand.withOpacity(0.08), blurRadius: 20)],
+    ),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Text('@$username', style: const TextStyle(fontSize: 12, color: kTxtSub)),
+        const Spacer(),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(color: kBrand.withOpacity(0.15), borderRadius: BorderRadius.circular(20)),
+          child: const Text('Portfólio', style: TextStyle(fontSize: 11, color: kBrand, fontWeight: FontWeight.w700)),
+        ),
+      ]),
+      const SizedBox(height: 10),
+      const Text('Saldo total estimado', style: TextStyle(fontSize: 12, color: kTxtSub)),
+      const SizedBox(height: 4),
+      Text('R\$ ${_fmt(totalBRL)}',
+          style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: kTxt,
+              fontFeatures: [FontFeature.tabularFigures()])),
+      const SizedBox(height: 14),
+      // Breakdown pills
+      Wrap(spacing: 12, runSpacing: 6, children: balances.take(4).map((b) {
+        final coin = market.coins.where((c) => c.symbol == b.asset).firstOrNull;
+        final brl = coin != null ? b.balanceDecimal * coin.priceBRL
+            : b.asset == 'USDT-sim' ? b.balanceDecimal * 5.0 : 0.0;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(color: Colors.white.withOpacity(0.06),
+              borderRadius: BorderRadius.circular(20)),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(b.asset, style: const TextStyle(fontSize: 11, color: kTxt, fontWeight: FontWeight.w700)),
+            const SizedBox(width: 6),
+            Text('R\$ ${_fmt(brl)}',
+                style: const TextStyle(fontSize: 11, color: kTxtSub,
+                    fontFeatures: [FontFeature.tabularFigures()])),
+          ]),
+        );
+      }).toList()),
+    ]),
+  );
 
-  Future<void> _addCredit() async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() => _busy = true);
-    final api = context.read<AppState>().api;
-    try {
-      final txId = await api.postCredit(
-        _accountCtrl.text.trim(),
-        double.parse(_amountCtrl.text.replaceAll(',', '.')),
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Credito enfileirado (tx_id: ${txId.substring(0, 8)}...)')),
-      );
-    } on ApiException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erro: ${e.message}')),
-      );
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
+  String _fmt(double v) {
+    if (v == 0) return '0,00';
+    if (v >= 1000) return v.toStringAsFixed(2).replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => '.');
+    return v.toStringAsFixed(2);
+  }
+}
+
+// ─── Deposit button ───────────────────────────────────────────────────────────
+
+class _DepositButton extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => Container(
+    decoration: BoxDecoration(borderRadius: BorderRadius.circular(12),
+        boxShadow: [BoxShadow(color: kBrand.withOpacity(0.25), blurRadius: 12)]),
+    child: FilledButton.icon(
+      onPressed: () => showDialog(
+        context: context,
+        builder: (_) => const DepositDialog(),
+      ),
+      icon: const Icon(Icons.add_rounded, size: 20, color: kBg),
+      label: const Text('Depositar', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: kBg)),
+      style: FilledButton.styleFrom(
+        backgroundColor: kBrand,
+        minimumSize: const Size(double.infinity, 52),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    ),
+  );
+}
+
+// ─── Empty wallet ─────────────────────────────────────────────────────────────
+
+class _EmptyWallet extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(vertical: 40),
+    decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(14), border: Border.all(color: kBorder)),
+    child: Column(children: [
+      const Icon(Icons.account_balance_wallet_outlined, size: 40, color: kTxtMuted),
+      const SizedBox(height: 12),
+      const Text('Carteira vazia', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: kTxtSub)),
+      const SizedBox(height: 6),
+      const Text('Faça um depósito para começar a negociar.',
+          style: TextStyle(fontSize: 12, color: kTxtMuted)),
+    ]),
+  );
+}
+
+// ─── Asset grid ───────────────────────────────────────────────────────────────
+
+class _AssetGrid extends StatelessWidget {
+  final List<AssetBalance> balances;
+  final MarketState market;
+  const _AssetGrid({required this.balances, required this.market});
+
+  @override
+  Widget build(BuildContext context) => Column(
+    children: balances.map((b) {
+      final coin = market.coins.where((c) => c.symbol == b.asset).firstOrNull;
+      final brl  = coin != null ? b.balanceDecimal * coin.priceBRL
+          : b.asset == 'USDT-sim' ? b.balanceDecimal * 5.0 : 0.0;
+      return _AssetRow(bal: b, brl: brl, coin: coin);
+    }).toList(),
+  );
+}
+
+class _AssetRow extends StatelessWidget {
+  final AssetBalance bal;
+  final double brl;
+  final MarketCoin? coin;
+  const _AssetRow({required this.bal, required this.brl, required this.coin});
+
+  Color _color() {
+    int h = 0; for (final c in bal.asset.codeUnits) h = (h * 31 + c) & 0xFFFF;
+    const cols = [Color(0xFFF7931A), Color(0xFF627EEA), Color(0xFFF3BA2F), Color(0xFF9945FF),
+      Color(0xFF00AAE4), Color(0xFFE84142), Color(0xFF00D4FF), Color(0xFF02C076)];
+    return cols[h % cols.length];
   }
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
-    final fmt = NumberFormat.simpleCurrency(locale: 'pt_BR');
-    final entries = state.balances.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
+    final c = _color();
+    final pctChange = coin?.change24h ?? 0;
+    final isUp = pctChange >= 0;
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Adicionar credito (simulado)',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Sem integracao com pagamento real. So injeta saldo virtual na conta.',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          flex: 2,
-                          child: TextFormField(
-                            controller: _accountCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'Conta',
-                              hintText: 'ex: alice',
-                            ),
-                            validator: (v) => (v == null || v.trim().isEmpty)
-                                ? 'Obrigatorio'
-                                : null,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: TextFormField(
-                            controller: _amountCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'Valor',
-                              prefixText: 'R\$ ',
-                            ),
-                            keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true,
-                            ),
-                            validator: (v) {
-                              final n = double.tryParse(
-                                (v ?? '').replaceAll(',', '.'),
-                              );
-                              if (n == null || n <= 0) return 'Invalido';
-                              return null;
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        FilledButton.icon(
-                          onPressed: _busy ? null : _addCredit,
-                          icon: const Icon(Icons.add),
-                          label: const Text('Creditar'),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        'Saldos',
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                      const Spacer(),
-                      Text(
-                        '${entries.length} conta${entries.length == 1 ? '' : 's'}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  if (entries.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 24),
-                      child: Center(
-                        child: Text(
-                          'Sem contas ainda. Adicione credito acima para comecar.',
-                          style: TextStyle(fontStyle: FontStyle.italic),
-                        ),
-                      ),
-                    )
-                  else
-                    ...entries.map(
-                      (e) => ListTile(
-                        leading: const CircleAvatar(
-                          child: Icon(Icons.person_outline),
-                        ),
-                        title: Text(e.key),
-                        trailing: Text(
-                          fmt.format(e.value),
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleMedium
-                              ?.copyWith(fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: kBorder)),
+      child: Row(children: [
+        // Avatar
+        Container(width: 38, height: 38,
+          decoration: BoxDecoration(borderRadius: BorderRadius.circular(10),
+              color: c.withOpacity(0.15), border: Border.all(color: c.withOpacity(0.3))),
+          child: Center(child: Text(bal.asset.isNotEmpty ? bal.asset[0] : '?',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: c))),
+        ),
+        const SizedBox(width: 12),
+
+        // Name + change
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(bal.asset, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: kTxt)),
+          if (coin != null)
+            Row(children: [
+              Text('\$${_fmtUSD(coin!.priceUSD)}',
+                  style: const TextStyle(fontSize: 11, color: kTxtSub,
+                      fontFeatures: [FontFeature.tabularFigures()])),
+              const SizedBox(width: 6),
+              Text('${isUp ? '+' : ''}${pctChange.toStringAsFixed(2)}%',
+                  style: TextStyle(fontSize: 10, color: isUp ? kBuy : kSell, fontWeight: FontWeight.w600)),
+            ]),
+        ])),
+
+        // Balance + BRL
+        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Text(_fmtAmt(bal.balanceDecimal, bal.asset),
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: kTxt,
+                  fontFeatures: [FontFeature.tabularFigures()])),
+          Text('R\$ ${_fmtBRL(brl)}',
+              style: const TextStyle(fontSize: 11, color: kTxtSub,
+                  fontFeatures: [FontFeature.tabularFigures()])),
+        ]),
+      ]),
     );
   }
+
+  String _fmtAmt(double v, String asset) {
+    if (v == 0) return '0';
+    if (v >= 1) return v.toStringAsFixed(4).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
+    return v.toStringAsExponential(4);
+  }
+  String _fmtBRL(double v) {
+    if (v >= 1000) return v.toStringAsFixed(2).replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => '.');
+    return v.toStringAsFixed(2);
+  }
+  String _fmtUSD(double v) {
+    if (v >= 1000) return '${(v/1000).toStringAsFixed(1)}K';
+    if (v >= 1) return v.toStringAsFixed(2);
+    if (v >= 0.001) return v.toStringAsFixed(5);
+    return v.toStringAsExponential(3);
+  }
+}
+
+// ─── Section header ───────────────────────────────────────────────────────────
+
+class _SectionHeader extends StatelessWidget {
+  final String title; final String? badge;
+  const _SectionHeader({required this.title, this.badge});
+  @override
+  Widget build(BuildContext context) => Row(children: [
+    Container(width: 3, height: 16,
+        decoration: BoxDecoration(color: kBrand, borderRadius: BorderRadius.circular(2),
+            boxShadow: [BoxShadow(color: kBrand.withOpacity(0.6), blurRadius: 6)])),
+    const SizedBox(width: 8),
+    Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: kTxt)),
+    if (badge != null) ...[
+      const SizedBox(width: 8),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+        decoration: BoxDecoration(color: kBrand.withOpacity(0.12), borderRadius: BorderRadius.circular(20)),
+        child: Text(badge!, style: const TextStyle(fontSize: 11, color: kBrand, fontWeight: FontWeight.w700)),
+      ),
+    ],
+  ]);
+}
+
+// ─── Open orders ──────────────────────────────────────────────────────────────
+
+class _OpenOrdersCard extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final orders = context.watch<TradingState>().openOrders;
+    if (orders.isEmpty) return _Empty(Icons.receipt_long_outlined, 'Nenhuma ordem aberta');
+    return Container(
+      decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(12), border: Border.all(color: kBorder)),
+      child: Column(children: orders.take(5).map((o) {
+        final c = o.side == 'buy' ? kBuy : kSell;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(border: Border(bottom: BorderSide(color: kBorder.withOpacity(0.5)))),
+          child: Row(children: [
+            Container(width: 3, height: 36, decoration: BoxDecoration(color: c, borderRadius: BorderRadius.circular(2))),
+            const SizedBox(width: 10),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('${o.side == 'buy' ? 'COMPRA' : 'VENDA'} ${o.type.toUpperCase()} · ${o.pair}',
+                  style: TextStyle(fontSize: 12, color: c, fontWeight: FontWeight.w800)),
+              Text(o.type == 'market' ? '${(o.quantity/1e8).toStringAsFixed(6)}'
+                  : '${(o.quantity/1e8).toStringAsFixed(6)} @ ${(o.price/1e8).toStringAsFixed(2)}',
+                  style: const TextStyle(fontSize: 11, color: kTxtSub)),
+            ])),
+            _Pill(o.status),
+          ]),
+        );
+      }).toList()),
+    );
+  }
+}
+
+class _Pill extends StatelessWidget {
+  final String s; const _Pill(this.s);
+  @override
+  Widget build(BuildContext context) {
+    final c = switch (s) {
+      'filled' => kBuy, 'partially_filled' => const Color(0xFFF0B90B),
+      'canceled' => kTxtSub, 'rejected' => kSell, _ => kBrand,
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: c.withOpacity(0.1), borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: c.withOpacity(0.3))),
+      child: Text(s, style: TextStyle(fontSize: 10, color: c, fontWeight: FontWeight.w700)),
+    );
+  }
+}
+
+// ─── Trades card ──────────────────────────────────────────────────────────────
+
+class _TradesCard extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final trades = context.watch<TradingState>().trades.take(8).toList();
+    if (trades.isEmpty) return _Empty(Icons.swap_horiz_outlined, 'Nenhuma movimentação ainda');
+    return Container(
+      decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(12), border: Border.all(color: kBorder)),
+      child: Column(children: [
+        Padding(padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            child: Row(children: [
+              Expanded(child: _H('Par')),
+              Expanded(child: _H('Preço', right: true)),
+              Expanded(child: _H('Qtd', right: true)),
+              Expanded(child: _H('Hora', right: true)),
+            ])),
+        Container(height: 1, color: kBorder),
+        ...trades.map((t) {
+          final up = t.takerSide == 'buy'; final c = up ? kBuy : kSell;
+          final ts = DateTime.fromMillisecondsSinceEpoch(t.timestampMs);
+          final priceStr = t.price > 1e10 ? (t.price/1e8).toStringAsFixed(2) : (t.price/1e8).toStringAsFixed(6);
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            child: Row(children: [
+              Expanded(child: Text(t.pair, style: const TextStyle(fontSize: 11, color: kTxt))),
+              Expanded(child: Text(priceStr, textAlign: TextAlign.right,
+                  style: TextStyle(fontSize: 11, color: c, fontFeatures: const [FontFeature.tabularFigures()]))),
+              Expanded(child: Text((t.quantity/1e8).toStringAsFixed(6), textAlign: TextAlign.right,
+                  style: const TextStyle(fontSize: 11, color: kTxt, fontFeatures: [FontFeature.tabularFigures()]))),
+              Expanded(child: Text(
+                  '${ts.hour.toString().padLeft(2,'0')}:${ts.minute.toString().padLeft(2,'0')}',
+                  textAlign: TextAlign.right, style: const TextStyle(fontSize: 11, color: kTxtMuted))),
+            ]),
+          );
+        }),
+      ]),
+    );
+  }
+}
+
+class _H extends StatelessWidget {
+  final String t; final bool right;
+  const _H(this.t, {this.right = false});
+  @override
+  Widget build(BuildContext context) => Text(t,
+      textAlign: right ? TextAlign.right : TextAlign.left,
+      style: const TextStyle(fontSize: 10, color: kTxtMuted, fontWeight: FontWeight.w600));
+}
+
+class _Empty extends StatelessWidget {
+  final IconData icon; final String label;
+  const _Empty(this.icon, this.label);
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(vertical: 32),
+    decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(12), border: Border.all(color: kBorder)),
+    child: Column(children: [
+      Icon(icon, size: 32, color: kTxtMuted),
+      const SizedBox(height: 8),
+      Text(label, style: const TextStyle(fontSize: 13, color: kTxtSub)),
+    ]),
+  );
 }

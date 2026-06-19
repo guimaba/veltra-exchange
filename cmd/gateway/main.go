@@ -28,11 +28,13 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/messaging"
+	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/pgstore"
 )
 
 func main() {
 	port := envOr("GATEWAY_PORT", "8080")
 	amqpURL := os.Getenv("AMQP_URL")
+	pgDSN := os.Getenv("POSTGRES_DSN")
 	staticDir := envOr("STATIC_DIR", "./static")
 
 	if amqpURL == "" {
@@ -54,12 +56,28 @@ func main() {
 	publisher := messaging.NewPublisher(client)
 	defer publisher.Close()
 
+	// Auth (Postgres) — opcional: se POSTGRES_DSN não estiver set, auth fica desabilitada
+	var authServer *AuthServer
+	if pgDSN != "" {
+		pgDB, err := pgstore.NewDB(pgDSN)
+		if err != nil {
+			log.Printf("[Gateway] Aviso: falha ao conectar ao Postgres (%v) — auth desabilitada", err)
+		} else {
+			authServer = NewAuthServer(pgDB)
+			authServer.SeedDefaultAdmin(ctx)
+			log.Printf("[Gateway] Auth habilitada (Postgres conectado)")
+		}
+	} else {
+		log.Printf("[Gateway] POSTGRES_DSN não configurado — auth desabilitada")
+	}
+
 	// Estado + Hub
 	state := NewState()
+	veltra := NewVeltraState()
 	hub := NewHub()
 	go hub.Run()
 
-	// Consumer dos eventos -> atualiza state + hub
+	// Consumer dos eventos da blockchain -> atualiza state + hub
 	consumer := messaging.NewConsumer(
 		client,
 		publisher,
@@ -76,8 +94,27 @@ func main() {
 	)
 	consumer.Start(ctx)
 
+	// Consumer dos eventos da Veltra Exchange -> projecoes de market data + hub.
+	// (Quando o servico dedicado de market data existir, esta projecao migra
+	// para la; o gateway segue sendo a borda WS — plano secao 4.1/4.4.)
+	veltraConsumer := messaging.NewConsumer(
+		client,
+		publisher,
+		messaging.ConsumeOptions{
+			Queue:    messaging.QueueMarketDataEvents,
+			Consumer: "gateway-veltra",
+			Prefetch: 50,
+		},
+		func(ctx context.Context, env messaging.Envelope, d amqp.Delivery) error {
+			veltra.ApplyEvent(d.RoutingKey, env)
+			hub.PushEvent(d.RoutingKey, json.RawMessage(env.Payload))
+			return nil
+		},
+	)
+	veltraConsumer.Start(ctx)
+
 	// HTTP server
-	server := NewServer(state, hub, publisher, staticDir)
+	server := NewServer(state, veltra, hub, publisher, authServer, staticDir)
 	httpServer := &http.Server{
 		Addr:              ":" + port,
 		Handler:           server.Routes(),
@@ -100,6 +137,7 @@ func main() {
 	defer shutdownCancel()
 	httpServer.Shutdown(shutdownCtx)
 	consumer.Stop()
+	veltraConsumer.Stop()
 }
 
 func envOr(key, fallback string) string {

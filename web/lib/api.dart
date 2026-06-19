@@ -18,6 +18,16 @@ String _wsUrl() {
 
 class ApiClient {
   final http.Client _http = http.Client();
+  String? _token;
+
+  void setToken(String? token) {
+    _token = token;
+  }
+
+  Map<String, String> get _authHeaders => {
+        'Content-Type': 'application/json',
+        if (_token != null) 'Authorization': 'Bearer $_token',
+      };
 
   Future<Map<String, dynamic>> getState() async {
     final res = await _http.get(Uri.parse('${_baseUrl()}/api/state'));
@@ -62,6 +72,157 @@ class ApiClient {
     _check(res);
     final body = jsonDecode(res.body) as Map<String, dynamic>;
     return body['tx_id'] as String;
+  }
+
+  // ===== Balance + Admin =====
+
+  Future<Map<String, dynamic>> getMyBalance() async {
+    final res = await _http.get(Uri.parse('${_baseUrl()}/api/balance'),
+        headers: _authHeaders);
+    _check(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> deposit({
+    required String amount,
+    required String method,
+  }) async {
+    final res = await _http.post(
+      Uri.parse('${_baseUrl()}/api/deposit'),
+      headers: _authHeaders,
+      body: jsonEncode({'amount': amount, 'method': method}),
+    );
+    _check(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> getAdminUsers() async {
+    final res = await _http.get(Uri.parse('${_baseUrl()}/api/admin/users'),
+        headers: _authHeaders);
+    _check(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> getAdminStats() async {
+    final res = await _http.get(Uri.parse('${_baseUrl()}/api/admin/stats'),
+        headers: _authHeaders);
+    _check(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  // ===== Market data =====
+
+  Future<Map<String, dynamic>> getMarket() async {
+    final res = await _http.get(Uri.parse('${_baseUrl()}/api/market'));
+    _check(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<dynamic> getCandles(String symbol) async {
+    final res = await _http.get(
+        Uri.parse('${_baseUrl()}/api/market/${symbol.toUpperCase()}/candles'));
+    _check(res);
+    return jsonDecode(res.body);
+  }
+
+  // ===== Auth =====
+
+  Future<Map<String, dynamic>> login(String username, String password) async {
+    final res = await _http.post(
+      Uri.parse('${_baseUrl()}/api/auth/login'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'username': username, 'password': password}),
+    );
+    _check(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> register(
+      String username, String email, String password) async {
+    final res = await _http.post(
+      Uri.parse('${_baseUrl()}/api/auth/register'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(
+          {'username': username, 'email': email, 'password': password}),
+    );
+    _check(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<void> logout(String token) async {
+    await _http.post(
+      Uri.parse('${_baseUrl()}/api/auth/logout'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+    );
+  }
+
+  // ===== Veltra Exchange =====
+
+  Future<Map<String, dynamic>> getVeltraState() async {
+    final res = await _http.get(Uri.parse('${_baseUrl()}/api/veltra/state'));
+    _check(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Envia uma ordem. Preco e quantidade viajam como STRING decimal — o
+  /// backend converte para inteiro escalado; o cliente nunca faz conta de
+  /// dinheiro em float.
+  Future<Map<String, dynamic>> placeOrder({
+    required String account,
+    required String pair,
+    required String side,
+    required String type,
+    required String quantity,
+    String price = '',
+    String timeInForce = '',
+  }) async {
+    final res = await _http.post(
+      Uri.parse('${_baseUrl()}/api/orders'),
+      headers: _authHeaders,
+      body: jsonEncode({
+        'account': account,
+        'pair': pair,
+        'side': side,
+        'type': type,
+        'price': price,
+        'quantity': quantity,
+        'time_in_force': timeInForce,
+      }),
+    );
+    _check(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<void> cancelOrder({
+    required String orderId,
+    required String account,
+    required String pair,
+  }) async {
+    final req = http.Request(
+      'DELETE',
+      Uri.parse('${_baseUrl()}/api/orders/$orderId'),
+    )
+      ..headers.addAll(_authHeaders)
+      ..body = jsonEncode({'account': account, 'pair': pair});
+    final streamed = await _http.send(req);
+    final res = await http.Response.fromStream(streamed);
+    _check(res);
+  }
+
+  Future<void> faucet({
+    required String account,
+    required String asset,
+    required String amount,
+  }) async {
+    final res = await _http.post(
+      Uri.parse('${_baseUrl()}/api/faucet'),
+      headers: _authHeaders,
+      body: jsonEncode({'account': account, 'asset': asset, 'amount': amount}),
+    );
+    _check(res);
   }
 
   void _check(http.Response res) {

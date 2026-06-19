@@ -16,16 +16,18 @@ import (
 
 var accountRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
 
-// Server agrega tudo: state, hub, publisher e static dir.
+// Server agrega tudo: state, hub, publisher, auth e static dir.
 type Server struct {
 	state     *State
+	veltra    *VeltraState
 	hub       *Hub
 	publisher *messaging.Publisher
+	auth      *AuthServer // nil quando Postgres não está configurado
 	staticDir string
 }
 
-func NewServer(state *State, hub *Hub, pub *messaging.Publisher, staticDir string) *Server {
-	return &Server{state: state, hub: hub, publisher: pub, staticDir: staticDir}
+func NewServer(state *State, veltra *VeltraState, hub *Hub, pub *messaging.Publisher, auth *AuthServer, staticDir string) *Server {
+	return &Server{state: state, veltra: veltra, hub: hub, publisher: pub, auth: auth, staticDir: staticDir}
 }
 
 func (s *Server) Routes() http.Handler {
@@ -37,6 +39,18 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/accounts/credit", s.postCredit)
 	mux.HandleFunc("/api/transactions", s.postTransaction)
 	mux.HandleFunc("/api/accounts/", s.getBalance) // /api/accounts/{name}/balance
+
+	// API REST de autenticação
+	s.authRoutes(mux)
+
+	// API REST de saldo + admin
+	s.balanceRoutes(mux)
+
+	// API REST de market data
+	s.marketRoutes(mux)
+
+	// API REST da Veltra Exchange (trading)
+	s.veltraRoutes(mux)
 
 	// WebSocket
 	mux.HandleFunc("/ws", s.serveWS)
@@ -207,9 +221,12 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	s.hub.Register <- conn
 
-	// Envia snapshot inicial
+	// Envia snapshots iniciais (blockchain + veltra)
 	if snap, err := s.state.SnapshotJSON(); err == nil {
 		conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"snapshot","data":`+string(snap)+`}`))
+	}
+	if snap, err := s.veltra.SnapshotJSON(); err == nil {
+		conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"veltra_snapshot","data":`+string(snap)+`}`))
 	}
 
 	// Loop de leitura: ignora payloads do cliente, so detecta close.
@@ -224,6 +241,10 @@ func (s *Server) serveWS(w http.ResponseWriter, r *http.Request) {
 }
 
 // ===== Helpers =====
+
+func decodeJSON(r *http.Request, v any) error {
+	return json.NewDecoder(r.Body).Decode(v)
+}
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
