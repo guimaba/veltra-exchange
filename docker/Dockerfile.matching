@@ -1,0 +1,39 @@
+# Dockerfile do matching-engine da Veltra Exchange.
+# Multi-stage: compila com a imagem golang completa, copia so o binario pra alpine.
+
+# ---------- Stage 1: build ----------
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /src
+
+# Cache de dependencias: copia os go.mod/go.sum primeiro
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copia o restante do codigo-fonte
+COPY cmd/ ./cmd/
+COPY pkg/ ./pkg/
+
+# Build estatico (CGO desabilitado para rodar em alpine sem libc dinamica)
+ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+RUN go build -ldflags="-s -w" -o /out/matching-engine ./cmd/matching-engine
+
+# ---------- Stage 2: runtime ----------
+FROM alpine:3.19
+
+RUN apk add --no-cache ca-certificates
+
+# Usuario nao-root; cria o diretorio de WAL/snapshots com permissao de escrita.
+RUN addgroup -S app && adduser -S app -G app \
+ && mkdir -p /data/matching && chown -R app:app /data
+USER app
+
+WORKDIR /app
+COPY --from=builder /out/matching-engine /app/matching-engine
+
+# Porta RPC de eleicao (Bully) — NODE_PORT controla o numero.
+EXPOSE 9101 9102 9103
+
+# Variaveis de ambiente: NODE_ID, NODE_PORT, PEERS, AMQP_URL, PAIRS, WAL_DIR,
+# SNAPSHOT_EVERY — definidas no docker-compose.yml.
+ENTRYPOINT ["/app/matching-engine"]

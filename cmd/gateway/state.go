@@ -20,20 +20,20 @@ import (
 type State struct {
 	mu sync.RWMutex
 
-	balances       map[string]float64
-	recentBlocks   []messaging.BlockMinedPayload
-	maxBlocks      int
-	currentLeader  int
-	pendingTxIDs   map[string]bool // tx em flight (publicada, aguardando resposta)
+	balances      map[string]float64
+	recentBlocks  []messaging.BlockMinedPayload
+	maxBlocks     int
+	currentLeader int
+	pendingTxIDs  map[string]bool // tx em flight (publicada, aguardando resposta)
 }
 
 func NewState() *State {
 	return &State{
-		balances:     map[string]float64{},
-		recentBlocks: []messaging.BlockMinedPayload{},
-		maxBlocks:    50,
+		balances:      map[string]float64{},
+		recentBlocks:  []messaging.BlockMinedPayload{},
+		maxBlocks:     50,
 		currentLeader: -1,
-		pendingTxIDs: map[string]bool{},
+		pendingTxIDs:  map[string]bool{},
 	}
 }
 
@@ -127,10 +127,10 @@ func (s *State) SnapshotJSON() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return json.Marshal(struct {
-		Balances     map[string]float64               `json:"balances"`
-		RecentBlocks []messaging.BlockMinedPayload    `json:"recent_blocks"`
-		Leader       int                              `json:"leader"`
-		Timestamp    time.Time                        `json:"timestamp"`
+		Balances     map[string]float64            `json:"balances"`
+		RecentBlocks []messaging.BlockMinedPayload `json:"recent_blocks"`
+		Leader       int                           `json:"leader"`
+		Timestamp    time.Time                     `json:"timestamp"`
 	}{
 		Balances:     s.balances,
 		RecentBlocks: s.recentBlocks,

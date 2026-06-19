@@ -1,0 +1,29 @@
+# Dockerfile do serviço Market Data da Veltra Exchange.
+# Busca preços reais da CoinGecko, mantém histórico OHLCV e publica
+# eventos market.update no exchange veltra.events (RabbitMQ).
+
+# ---------- Stage 1: build ----------
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd/ ./cmd/
+COPY pkg/ ./pkg/
+
+ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
+RUN go build -ldflags="-s -w" -o /out/marketdata ./cmd/marketdata
+
+# ---------- Stage 2: runtime ----------
+FROM alpine:3.19
+
+RUN apk add --no-cache ca-certificates
+RUN addgroup -S app && adduser -S app -G app
+USER app
+
+WORKDIR /app
+COPY --from=builder /out/marketdata /app/marketdata
+
+ENTRYPOINT ["/app/marketdata"]
