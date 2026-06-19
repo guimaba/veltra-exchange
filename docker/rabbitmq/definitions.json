@@ -1,26 +1,35 @@
 {
   "rabbit_version": "3.12.0",
   "users": [
-    { "name": "admin",   "password": "admin",      "tags": ["administrator"] },
-    { "name": "gateway", "password": "gateway-pw", "tags": [] },
-    { "name": "node",    "password": "node-pw",    "tags": [] },
-    { "name": "audit",   "password": "audit-pw",   "tags": [] }
+    { "name": "admin",    "password": "admin",       "tags": ["administrator"] },
+    { "name": "gateway",  "password": "gateway-pw",  "tags": [] },
+    { "name": "node",     "password": "node-pw",     "tags": [] },
+    { "name": "audit",    "password": "audit-pw",    "tags": [] },
+    { "name": "matching", "password": "matching-pw", "tags": [] },
+    { "name": "ledger",   "password": "ledger-pw",   "tags": [] },
+    { "name": "marketdata","password": "marketdata-pw","tags": [] }
   ],
   "vhosts": [
     { "name": "/blockchain" }
   ],
   "permissions": [
-    { "user": "admin",   "vhost": "/blockchain", "configure": ".*", "write": ".*", "read": ".*" },
-    { "user": "gateway", "vhost": "/blockchain", "configure": "^$", "write": "^blockchain\\.commands$", "read": "^q\\.gateway\\.events$" },
-    { "user": "node",    "vhost": "/blockchain", "configure": "^$", "write": "^blockchain\\.(events|retry|dlx)$", "read": "^q\\.leader\\.commands$" },
-    { "user": "audit",   "vhost": "/blockchain", "configure": "^$", "write": "^blockchain\\.(retry|dlx)$", "read": "^q\\.audit\\.events$" }
+    { "user": "admin",     "vhost": "/blockchain", "configure": ".*", "write": ".*", "read": ".*" },
+    { "user": "gateway",   "vhost": "/blockchain", "configure": "^$", "write": "^(blockchain\\.(commands|retry|dlx)|veltra\\.(commands|events))$", "read": "^q\\.(gateway\\.events|marketdata\\.events)$" },
+    { "user": "node",      "vhost": "/blockchain", "configure": "^$", "write": "^blockchain\\.(events|retry|dlx)$", "read": "^q\\.leader\\.commands$" },
+    { "user": "audit",     "vhost": "/blockchain", "configure": "^$", "write": "^blockchain\\.(retry|dlx)$", "read": "^q\\.(audit\\.events|exchange\\.audit)$" },
+    { "user": "matching",  "vhost": "/blockchain", "configure": "^$", "write": "^(veltra\\.events|blockchain\\.(retry|dlx))$", "read": "^q\\.matching\\.commands$" },
+    { "user": "ledger",    "vhost": "/blockchain", "configure": "^$", "write": "^(veltra\\.events|blockchain\\.(retry|dlx))$", "read": "^q\\.ledger\\.events$" },
+    { "user": "marketdata","vhost": "/blockchain", "configure": "^$", "write": "^(veltra\\.events|blockchain\\.(retry|dlx))$", "read": "^q\\.marketdata\\.events$" }
   ],
   "policies": [],
   "exchanges": [
     { "name": "blockchain.commands", "vhost": "/blockchain", "type": "direct", "durable": true, "auto_delete": false, "internal": false, "arguments": {} },
     { "name": "blockchain.events",   "vhost": "/blockchain", "type": "topic",  "durable": true, "auto_delete": false, "internal": false, "arguments": {} },
     { "name": "blockchain.dlx",      "vhost": "/blockchain", "type": "fanout", "durable": true, "auto_delete": false, "internal": false, "arguments": {} },
-    { "name": "blockchain.retry",    "vhost": "/blockchain", "type": "direct", "durable": true, "auto_delete": false, "internal": true,  "arguments": {} }
+    { "name": "blockchain.retry",    "vhost": "/blockchain", "type": "direct", "durable": true, "auto_delete": false, "internal": true,  "arguments": {} },
+
+    { "name": "veltra.commands", "vhost": "/blockchain", "type": "topic", "durable": true, "auto_delete": false, "internal": false, "arguments": {} },
+    { "name": "veltra.events",   "vhost": "/blockchain", "type": "topic", "durable": true, "auto_delete": false, "internal": false, "arguments": {} }
   ],
   "queues": [
     {
@@ -72,6 +81,49 @@
         "x-message-ttl": 5000,
         "x-dead-letter-exchange": "blockchain.commands"
       }
+    },
+
+    {
+      "name": "q.matching.commands",
+      "vhost": "/blockchain",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 60000,
+        "x-dead-letter-exchange": "blockchain.dlx",
+        "x-max-length": 50000,
+        "x-overflow": "reject-publish"
+      }
+    },
+    {
+      "name": "q.ledger.events",
+      "vhost": "/blockchain",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "blockchain.dlx",
+        "x-max-length": 100000,
+        "x-overflow": "reject-publish"
+      }
+    },
+    {
+      "name": "q.marketdata.events",
+      "vhost": "/blockchain",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-max-length": 50000,
+        "x-overflow": "drop-head"
+      }
+    },
+    {
+      "name": "q.exchange.audit",
+      "vhost": "/blockchain",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-message-ttl": 86400000
+      }
     }
   ],
   "bindings": [
@@ -81,6 +133,13 @@
     { "source": "blockchain.events",   "vhost": "/blockchain", "destination": "q.audit.events",    "destination_type": "queue", "routing_key": "#", "arguments": {} },
     { "source": "blockchain.dlx",      "vhost": "/blockchain", "destination": "q.dlq",             "destination_type": "queue", "routing_key": "",  "arguments": {} },
     { "source": "blockchain.retry",    "vhost": "/blockchain", "destination": "q.retry.5s",        "destination_type": "queue", "routing_key": "credit.requested",      "arguments": {} },
-    { "source": "blockchain.retry",    "vhost": "/blockchain", "destination": "q.retry.5s",        "destination_type": "queue", "routing_key": "transaction.requested", "arguments": {} }
+    { "source": "blockchain.retry",    "vhost": "/blockchain", "destination": "q.retry.5s",        "destination_type": "queue", "routing_key": "transaction.requested", "arguments": {} },
+
+    { "source": "veltra.commands", "vhost": "/blockchain", "destination": "q.matching.commands", "destination_type": "queue", "routing_key": "order.place",  "arguments": {} },
+    { "source": "veltra.commands", "vhost": "/blockchain", "destination": "q.matching.commands", "destination_type": "queue", "routing_key": "order.cancel", "arguments": {} },
+    { "source": "veltra.events",   "vhost": "/blockchain", "destination": "q.ledger.events",     "destination_type": "queue", "routing_key": "trade.executed", "arguments": {} },
+    { "source": "veltra.events",   "vhost": "/blockchain", "destination": "q.ledger.events",     "destination_type": "queue", "routing_key": "faucet.credit",  "arguments": {} },
+    { "source": "veltra.events",   "vhost": "/blockchain", "destination": "q.marketdata.events", "destination_type": "queue", "routing_key": "#", "arguments": {} },
+    { "source": "veltra.events",   "vhost": "/blockchain", "destination": "q.exchange.audit",    "destination_type": "queue", "routing_key": "#", "arguments": {} }
   ]
 }
