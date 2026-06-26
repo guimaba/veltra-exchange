@@ -85,9 +85,44 @@ func (l *Ledger) GetAccount(ctx context.Context, tradingAcctID int64, asset stri
 	return &acct, nil
 }
 
-// PostEntry cria um par débito/crédito balanceado em duas contas
-// debitAcctID += amount, creditAcctID -= amount (modelo contábil: débito positivo, crédito negativo)
-// referenceID é usado para idempotência (ex: tradeID)
+// postEntryTx aplica um par débito/crédito balanceado DENTRO de uma transação
+// já aberta. É IDEMPOTENTE: o INSERT do débito usa
+// ON CONFLICT (ledger_account_id, reference_id) DO NOTHING; se nada foi inserido
+// (reference já aplicada para esta conta), retorna applied=false e não toca em
+// nenhum saldo — o redelivery do RabbitMQ não duplica lançamentos.
+// debitAcctID += amount, creditAcctID -= amount.
+func (l *Ledger) postEntryTx(ctx context.Context, tx *sql.Tx, debitAcctID, creditAcctID, amount int64, opType, referenceID, desc string) (applied bool, err error) {
+	const qIns = `INSERT INTO ledger.postings (ledger_account_id, amount, operation_type, reference_id, description)
+	              VALUES ($1, $2, $3, $4, $5)
+	              ON CONFLICT (ledger_account_id, reference_id) DO NOTHING`
+
+	res, err := tx.ExecContext(ctx, qIns, debitAcctID, amount, opType, referenceID, desc)
+	if err != nil {
+		return false, fmt.Errorf("ledger.postEntryTx debit: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// Já aplicado (mesma conta+referência) → idempotente, nada a fazer.
+		return false, nil
+	}
+
+	if _, err := tx.ExecContext(ctx, qIns, creditAcctID, -amount, opType, referenceID, desc); err != nil {
+		return false, fmt.Errorf("ledger.postEntryTx credit: %w", err)
+	}
+
+	const qUpdateDebit = `UPDATE ledger.accounts SET balance = balance + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`
+	if _, err := tx.ExecContext(ctx, qUpdateDebit, amount, debitAcctID); err != nil {
+		return false, fmt.Errorf("ledger.postEntryTx update debit: %w", err)
+	}
+
+	const qUpdateCredit = `UPDATE ledger.accounts SET balance = balance - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`
+	if _, err := tx.ExecContext(ctx, qUpdateCredit, amount, creditAcctID); err != nil {
+		return false, fmt.Errorf("ledger.postEntryTx update credit: %w", err)
+	}
+	return true, nil
+}
+
+// PostEntry cria um par débito/crédito balanceado em duas contas, em sua própria
+// transação. Idempotente via reference_id (ver postEntryTx).
 func (l *Ledger) PostEntry(ctx context.Context, debitAcctID, creditAcctID, amount int64, opType, referenceID, desc string) error {
 	tx, err := l.db.Conn().BeginTx(ctx, nil)
 	if err != nil {
@@ -95,26 +130,8 @@ func (l *Ledger) PostEntry(ctx context.Context, debitAcctID, creditAcctID, amoun
 	}
 	defer tx.Rollback()
 
-	// Insere débito
-	const qDebit = `INSERT INTO ledger.postings (ledger_account_id, amount, operation_type, reference_id, description) VALUES ($1, $2, $3, $4, $5)`
-	if _, err := tx.ExecContext(ctx, qDebit, debitAcctID, amount, opType, referenceID, desc); err != nil {
-		return fmt.Errorf("ledger.PostEntry debit: %w", err)
-	}
-
-	// Insere crédito (amount negativo, model)
-	if _, err := tx.ExecContext(ctx, qDebit, creditAcctID, -amount, opType, referenceID, desc); err != nil {
-		return fmt.Errorf("ledger.PostEntry credit: %w", err)
-	}
-
-	// Atualiza balances (recalc via trigger ou explicit — aqui é explicit)
-	const qUpdateDebit = `UPDATE ledger.accounts SET balance = balance + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`
-	if _, err := tx.ExecContext(ctx, qUpdateDebit, amount, debitAcctID); err != nil {
-		return fmt.Errorf("ledger.PostEntry update debit: %w", err)
-	}
-
-	const qUpdateCredit = `UPDATE ledger.accounts SET balance = balance - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`
-	if _, err := tx.ExecContext(ctx, qUpdateCredit, amount, creditAcctID); err != nil {
-		return fmt.Errorf("ledger.PostEntry update credit: %w", err)
+	if _, err := l.postEntryTx(ctx, tx, debitAcctID, creditAcctID, amount, opType, referenceID, desc); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -163,6 +180,107 @@ func (l *Ledger) ReleaseHold(ctx context.Context, acctID int64, orderID string) 
 	}
 
 	return amount, nil
+}
+
+// ReserveIfAvailable reserva `amount` do ativo na conta de forma ATÔMICA e
+// condicional: o saldo só é reservado se houver disponível suficiente, decidido
+// na MESMA instrução UPDATE (WHERE balance-reserved >= amount). Isso elimina a
+// janela de corrida (TOCTOU) entre "validar saldo" e "reservar" — duas ordens
+// concorrentes não conseguem reservar o mesmo saldo. Idempotente por orderID
+// (um redelivery/retry não reserva em dobro). Retorna ok=false se insuficiente.
+func (l *Ledger) ReserveIfAvailable(ctx context.Context, tradingAcctID int64, asset, orderID string, amount int64, reason string) (bool, error) {
+	if amount <= 0 {
+		return true, nil // nada a reservar
+	}
+	tx, err := l.db.Conn().BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("ReserveIfAvailable begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Garante a conta-ativo e obtém seu id.
+	var acctID int64
+	const qAcct = `INSERT INTO ledger.accounts (trading_account_id, asset) VALUES ($1, $2)
+	               ON CONFLICT (trading_account_id, asset) DO UPDATE SET trading_account_id = EXCLUDED.trading_account_id
+	               RETURNING id`
+	if err := tx.QueryRowContext(ctx, qAcct, tradingAcctID, asset).Scan(&acctID); err != nil {
+		return false, fmt.Errorf("ReserveIfAvailable acct: %w", err)
+	}
+
+	// Registro de hold idempotente: se já existe hold para este order, considera
+	// reservado (não soma de novo).
+	const qHold = `INSERT INTO ledger.holds (ledger_account_id, order_id, amount, reason)
+	               VALUES ($1, $2, $3, $4) ON CONFLICT (ledger_account_id, order_id) DO NOTHING`
+	resHold, err := tx.ExecContext(ctx, qHold, acctID, orderID, amount, reason)
+	if err != nil {
+		return false, fmt.Errorf("ReserveIfAvailable hold: %w", err)
+	}
+	if n, _ := resHold.RowsAffected(); n == 0 {
+		return true, tx.Commit() // já reservado anteriormente → idempotente
+	}
+
+	// Reserva condicional atômica: só aplica se houver disponível.
+	const qReserve = `UPDATE ledger.accounts SET reserved = reserved + $1, updated_at = CURRENT_TIMESTAMP
+	                  WHERE id = $2 AND (balance - reserved) >= $1`
+	resRes, err := tx.ExecContext(ctx, qReserve, amount, acctID)
+	if err != nil {
+		return false, fmt.Errorf("ReserveIfAvailable reserve: %w", err)
+	}
+	if n, _ := resRes.RowsAffected(); n == 0 {
+		// Saldo insuficiente → rollback (desfaz o INSERT do hold) e recusa.
+		return false, nil
+	}
+	return true, tx.Commit()
+}
+
+// ReleaseReserveByOrder libera os holds ativos de um orderID (devolve o saldo
+// reservado ao disponível). Chamado quando a ordem atinge estado terminal
+// (filled total / canceled / rejected). Liberar o hold cheio no fechamento é
+// correto mesmo com price improvement: o débito real já moveu `balance` no
+// settlement; aqui só desfazemos a reserva original.
+func (l *Ledger) ReleaseReserveByOrder(ctx context.Context, orderID string) error {
+	if orderID == "" {
+		return nil
+	}
+	tx, err := l.db.Conn().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("ReleaseReserveByOrder begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx,
+		`SELECT ledger_account_id, amount FROM ledger.holds WHERE order_id = $1 AND released_at IS NULL`, orderID)
+	if err != nil {
+		return fmt.Errorf("ReleaseReserveByOrder query: %w", err)
+	}
+	type held struct{ acctID, amount int64 }
+	var holds []held
+	for rows.Next() {
+		var h held
+		if err := rows.Scan(&h.acctID, &h.amount); err != nil {
+			rows.Close()
+			return fmt.Errorf("ReleaseReserveByOrder scan: %w", err)
+		}
+		holds = append(holds, h)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("ReleaseReserveByOrder rows: %w", err)
+	}
+
+	for _, h := range holds {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE ledger.holds SET released_at = CURRENT_TIMESTAMP WHERE ledger_account_id = $1 AND order_id = $2 AND released_at IS NULL`,
+			h.acctID, orderID); err != nil {
+			return fmt.Errorf("ReleaseReserveByOrder release: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE ledger.accounts SET reserved = reserved - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+			h.amount, h.acctID); err != nil {
+			return fmt.Errorf("ReleaseReserveByOrder update reserved: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // GetBalance retorna o saldo total (soma dos postings) de uma conta

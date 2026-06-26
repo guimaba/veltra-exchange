@@ -313,6 +313,18 @@ func (s *VeltraState) SnapshotJSON() ([]byte, error) {
 	})
 }
 
+// ClientOrderIDFor resolve o client_order_id de uma ordem pela projeção
+// (o payload de order.canceled não o carrega; a reserva do OMS é chaveada pelo
+// client_order_id, então precisamos mapear order_id -> client_order_id aqui).
+func (s *VeltraState) ClientOrderIDFor(orderID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if o, ok := s.orders[orderID]; ok {
+		return o.ClientOrderID
+	}
+	return ""
+}
+
 // MarketPriceFor retorna o preco corrente de um ativo (em menor unidade) a
 // partir dos dados de market recebidos via market.update.
 // Retorna 0 se o simbolo nao estiver na lista.

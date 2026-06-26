@@ -68,7 +68,22 @@ func main() {
 	)
 	consumer.Start(ctx)
 
-	log.Printf("[Audit] Pronto. Aguardando eventos em %s.", messaging.QueueAuditEvents)
+	// Trilha de auditoria da Veltra Exchange (plano §5.2 — "log de eventos
+	// permite reconstruir e auditar qualquer estado"). Consome q.exchange.audit
+	// (todos os eventos da exchange) e persiste os eventos de negócio.
+	veltraAudit := messaging.NewConsumer(
+		client,
+		publisher,
+		messaging.ConsumeOptions{
+			Queue:    messaging.QueueExchangeAudit,
+			Consumer: "audit-veltra",
+			Prefetch: 50,
+		},
+		veltraHandler(store),
+	)
+	veltraAudit.Start(ctx)
+
+	log.Printf("[Audit] Pronto. Eventos em %s e %s.", messaging.QueueAuditEvents, messaging.QueueExchangeAudit)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -76,6 +91,30 @@ func main() {
 
 	log.Printf("[Audit] Encerrando...")
 	consumer.Stop()
+	veltraAudit.Stop()
+}
+
+// veltraHandler persiste os eventos de NEGÓCIO da Veltra (order.*, trade.executed,
+// faucet.credit, ledger.posted). Ignora projeções de alto volume (book.updated,
+// market.update) que não têm valor de auditoria e inflariam a tabela.
+func veltraHandler(store *Store) messaging.Handler {
+	skip := map[string]bool{
+		messaging.RKBookUpdated:  true,
+		messaging.RKMarketUpdate: true,
+	}
+	return func(ctx context.Context, env messaging.Envelope, d amqp.Delivery) error {
+		if skip[d.RoutingKey] {
+			return nil // ACK sem persistir
+		}
+		if err := store.SaveEvent(ctx, env.Schema, env.TxID, env.Payload); err != nil {
+			if isTransientDB(err) {
+				return messaging.Transient("falha ao persistir audit veltra", err)
+			}
+			return messaging.Permanent("erro persistente ao gravar audit veltra", err)
+		}
+		log.Printf("[Audit/Veltra] Persistido: schema=%s rk=%s tx=%s", env.Schema, d.RoutingKey, env.TxID)
+		return nil
+	}
 }
 
 // handler processa cada envelope persistindo em audit_events. Erros de DB

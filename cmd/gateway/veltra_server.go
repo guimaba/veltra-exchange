@@ -19,18 +19,12 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync/atomic"
-	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/exchange"
+	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/ledger"
 	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/messaging"
 	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/money"
 )
-
-// simTradeSeq e o contador atomico global de sequencia para trades simulados.
-var simTradeSeq uint64
 
 // marketRoutes registra os endpoints de market data.
 func (s *Server) marketRoutes(mux *http.ServeMux) {
@@ -83,6 +77,41 @@ func (s *Server) veltraRoutes(mux *http.ServeMux) {
 	mux.Handle("/api/orders/", handleCancel)
 	mux.Handle("/api/faucet", handleFaucet)
 	mux.HandleFunc("/api/veltra/state", s.getVeltraState)
+	mux.HandleFunc("/api/veltra/merkle", s.getMerkleRoots)
+}
+
+// getMerkleRoots expõe a trilha de auditoria: as Merkle roots por período
+// computadas pelo ledger (plano §4.3 — provas de auditoria sem expor o razão).
+func (s *Server) getMerkleRoots(w http.ResponseWriter, r *http.Request) {
+	if s.auth == nil {
+		writeError(w, http.StatusServiceUnavailable, "auditoria indisponivel (sem Postgres)")
+		return
+	}
+	rows, err := s.auth.db.QueryContext(r.Context(),
+		`SELECT period_start, period_end, root_hash, posting_count
+		 FROM ledger.merkle_roots ORDER BY period_end DESC LIMIT 50`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+
+	type merkleRoot struct {
+		PeriodStart  string `json:"period_start"`
+		PeriodEnd    string `json:"period_end"`
+		RootHash     string `json:"root_hash"`
+		PostingCount int64  `json:"posting_count"`
+	}
+	out := []merkleRoot{}
+	for rows.Next() {
+		var m merkleRoot
+		if err := rows.Scan(&m.PeriodStart, &m.PeriodEnd, &m.RootHash, &m.PostingCount); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		out = append(out, m)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"merkle_roots": out})
 }
 
 func (s *Server) getVeltraState(w http.ResponseWriter, r *http.Request) {
@@ -95,107 +124,34 @@ func (s *Server) getVeltraState(w http.ResponseWriter, r *http.Request) {
 	w.Write(body)
 }
 
-// simulateTrade executa um fill imediato simulado para pares nao-VLT.
-// Publica order.accepted, order.filled e trade.executed no exchange de eventos.
-// Retorna o orderID gerado e qualquer erro de publicacao.
-func (s *Server) simulateTrade(
-	ctx context.Context,
-	account, pair, side, orderType string,
-	quantity int64,
-	limitPrice int64,
-	clientOrderID string,
-) (orderID string, fillPrice int64, err error) {
-	symbol, _ := func() (string, string) {
-		if idx := strings.Index(pair, "/"); idx >= 0 {
-			return pair[:idx], pair[idx+1:]
+// releaseHoldOnTerminal libera a reserva (hold) do OMS quando uma ordem atinge
+// estado terminal. Chamado pelo consumer de eventos da Veltra no gateway.
+//   - order.filled com remaining=0 → ordem totalmente executada
+//   - order.rejected               → recusada no motor
+//   - order.canceled               → cancelada (client_order_id resolvido pela projeção)
+func releaseHoldOnTerminal(ctx context.Context, l *ledger.Ledger, veltra *VeltraState, rk string, env messaging.Envelope) {
+	if l == nil {
+		return
+	}
+	switch rk {
+	case messaging.RKOrderFilled:
+		var p messaging.OrderFilledPayload
+		if env.Unmarshal(&p) == nil && p.RemainingQty == 0 && p.ClientOrderID != "" {
+			_ = l.ReleaseReserveByOrder(ctx, p.ClientOrderID)
 		}
-		return pair, ""
-	}()
-
-	// Determina preco de fill: usa o preco corrente de mercado sempre.
-	fillPrice = s.veltra.MarketPriceFor(symbol)
-	if fillPrice == 0 {
-		// Simbolo desconhecido mas aceito; usa limitPrice ou rejeita
-		if limitPrice > 0 {
-			fillPrice = limitPrice
-		} else {
-			return "", 0, fmt.Errorf("preco de mercado indisponivel para %s", symbol)
+	case messaging.RKOrderRejected:
+		var p messaging.OrderRejectedPayload
+		if env.Unmarshal(&p) == nil && p.ClientOrderID != "" {
+			_ = l.ReleaseReserveByOrder(ctx, p.ClientOrderID)
+		}
+	case messaging.RKOrderCanceled:
+		var p messaging.OrderCanceledPayload
+		if env.Unmarshal(&p) == nil {
+			if coid := veltra.ClientOrderIDFor(p.OrderID); coid != "" {
+				_ = l.ReleaseReserveByOrder(ctx, coid)
+			}
 		}
 	}
-
-	orderID = uuid.NewString()
-	tradeID := uuid.NewString()
-	seq := atomic.AddUint64(&simTradeSeq, 1)
-	tradeIDStr := fmt.Sprintf("%s-sim-%s", symbol, tradeID[:8])
-	nowMs := time.Now().UnixMilli()
-
-	// 1. order.accepted
-	acceptedPayload := messaging.OrderAcceptedPayload{
-		OrderID:       orderID,
-		ClientOrderID: clientOrderID,
-		Account:       account,
-		Pair:          pair,
-		Side:          side,
-		Type:          orderType,
-		Price:         limitPrice,
-		Quantity:      quantity,
-		Sequence:      seq,
-	}
-	envAccepted, err := messaging.NewEnvelope(messaging.SchemaOrderAccepted, "", acceptedPayload)
-	if err != nil {
-		return "", 0, fmt.Errorf("erro ao montar order.accepted: %w", err)
-	}
-	if err := s.publisher.Publish(ctx, messaging.ExchangeVeltraEvents, messaging.RKOrderAccepted, envAccepted, nil); err != nil {
-		log.Printf("[Gateway] simulateTrade: falha ao publicar order.accepted: %v", err)
-		return "", 0, fmt.Errorf("broker indisponivel (order.accepted): %w", err)
-	}
-
-	// 2. order.filled
-	filledPayload := messaging.OrderFilledPayload{
-		OrderID:          orderID,
-		ClientOrderID:    clientOrderID,
-		Account:          account,
-		Pair:             pair,
-		Side:             side,
-		Price:            fillPrice,
-		FillQuantity:     quantity,
-		CumulativeFilled: quantity,
-		RemainingQty:     0,
-		Status:           "filled",
-	}
-	envFilled, err := messaging.NewEnvelope(messaging.SchemaOrderFilled, "", filledPayload)
-	if err != nil {
-		return "", 0, fmt.Errorf("erro ao montar order.filled: %w", err)
-	}
-	if err := s.publisher.Publish(ctx, messaging.ExchangeVeltraEvents, messaging.RKOrderFilled, envFilled, nil); err != nil {
-		log.Printf("[Gateway] simulateTrade: falha ao publicar order.filled: %v", err)
-		return "", 0, fmt.Errorf("broker indisponivel (order.filled): %w", err)
-	}
-
-	// 3. trade.executed
-	tradePayload := messaging.TradeExecutedPayload{
-		TradeID:      tradeIDStr,
-		Pair:         pair,
-		Price:        fillPrice,
-		Quantity:     quantity,
-		TakerOrderID: orderID,
-		MakerOrderID: "_market",
-		TakerAccount: account,
-		MakerAccount: "_market",
-		TakerSide:    side,
-		Sequence:     seq,
-		TimestampMs:  nowMs,
-	}
-	envTrade, err := messaging.NewEnvelope(messaging.SchemaTradeExecuted, "", tradePayload)
-	if err != nil {
-		return "", 0, fmt.Errorf("erro ao montar trade.executed: %w", err)
-	}
-	if err := s.publisher.Publish(ctx, messaging.ExchangeVeltraEvents, messaging.RKTradeExecuted, envTrade, nil); err != nil {
-		log.Printf("[Gateway] simulateTrade: falha ao publicar trade.executed: %v", err)
-		return "", 0, fmt.Errorf("broker indisponivel (trade.executed): %w", err)
-	}
-
-	return orderID, fillPrice, nil
 }
 
 type orderReq struct {
@@ -272,109 +228,94 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ── OMS pré-trade: valida saldo disponível antes de qualquer execução ──
-	if claims, ok := ClaimsFromContext(r.Context()); ok && s.auth != nil {
-		baseAsset  := req.Pair[:strings.Index(req.Pair, "/")]
-		quoteAsset := req.Pair[strings.Index(req.Pair, "/")+1:]
-
-		var balErr error
-		if req.Side == "sell" {
-			// Venda: precisa ter o ativo base
-			balErr = s.CheckSufficientBalance(r.Context(), claims.AccountID, baseAsset, int64(qty))
-		} else {
-			// Compra: precisa ter USDT-sim suficiente
-			// Para market order, estima pelo preço atual de mercado
-			var notional int64
-			if req.Type == "limit" && int64(price) > 0 {
-				// preço * quantidade / scale
-				notional = int64(price) / 100_000_000 * int64(qty)
-			} else {
-				// market: usa preço de mercado
-				mktPrice := s.veltra.MarketPriceFor(baseAsset)
-				if mktPrice > 0 {
-					notional = mktPrice / 100_000_000 * int64(qty)
-				}
-			}
-			if notional > 0 {
-				balErr = s.CheckSufficientBalance(r.Context(), claims.AccountID, quoteAsset, notional)
-			}
-		}
-		if balErr != nil {
-			writeError(w, http.StatusBadRequest, balErr.Error())
-			return
-		}
-	}
-
-	// Roteia: VLT/USDT-sim vai ao matching engine real; todos os outros pares
-	// recebem fill simulado imediato no gateway.
-	if req.Pair == "VLT/USDT-sim" {
-		// Caminho original: publica order.place no exchange de comandos.
-		payload := messaging.OrderPlacePayload{
-			ClientOrderID: req.ClientOrderID,
-			Account:       req.Account,
-			Pair:          req.Pair,
-			Side:          req.Side,
-			Type:          req.Type,
-			TimeInForce:   tif,
-			Price:         int64(price),
-			Quantity:      int64(qty),
-		}
-		env, err := messaging.NewEnvelope(messaging.SchemaOrderPlace, "", payload)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		if payload.ClientOrderID == "" {
-			payload.ClientOrderID = env.TxID
-			env, _ = messaging.NewEnvelope(messaging.SchemaOrderPlace, env.TxID, payload)
-		}
-		if err := s.publisher.Publish(r.Context(), messaging.ExchangeVeltraCommands, messaging.RKOrderPlace, env, nil); err != nil {
-			log.Printf("[Gateway] Falha ao publicar order.place: %v", err)
-			writeError(w, http.StatusServiceUnavailable, "broker indisponivel")
-			return
-		}
-		writeJSON(w, http.StatusAccepted, map[string]any{
-			"status":          "queued",
-			"tx_id":           env.TxID,
-			"client_order_id": payload.ClientOrderID,
-		})
-		return
-	}
-
-	// Pares simulados: validar que o quote e USDT-sim.
-	parsed, _ := exchange.ParsePair(req.Pair) // ja validado acima
+	// Apenas pares com quote USDT-sim são suportados (VLT/USDT-sim + catálogo).
+	parsed, _ := exchange.ParsePair(req.Pair) // já validado acima
 	if string(parsed.Quote) != "USDT-sim" {
 		writeError(w, http.StatusBadRequest, "apenas pares com quote USDT-sim sao suportados")
 		return
 	}
+	baseAsset := string(parsed.Base)
+	quoteAsset := string(parsed.Quote)
 
-	// Garante client_order_id para a resposta.
-	clientOrderID := req.ClientOrderID
-	if clientOrderID == "" {
-		clientOrderID = uuid.NewString()
+	// Monta o comando order.place e fixa o client_order_id (idempotência) ANTES
+	// da reserva — a reserva e o release do hold são chaveados por ele.
+	payload := messaging.OrderPlacePayload{
+		ClientOrderID: req.ClientOrderID,
+		Account:       req.Account,
+		Pair:          req.Pair,
+		Side:          req.Side,
+		Type:          req.Type,
+		TimeInForce:   tif,
+		Price:         int64(price),
+		Quantity:      int64(qty),
 	}
-
-	orderID, fillPrice, err := s.simulateTrade(
-		r.Context(),
-		req.Account,
-		req.Pair,
-		req.Side,
-		req.Type,
-		int64(qty),
-		int64(price),
-		clientOrderID,
-	)
+	env, err := messaging.NewEnvelope(messaging.SchemaOrderPlace, "", payload)
 	if err != nil {
-		log.Printf("[Gateway] simulateTrade(%s): %v", req.Pair, err)
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if payload.ClientOrderID == "" {
+		payload.ClientOrderID = env.TxID
+		env, _ = messaging.NewEnvelope(messaging.SchemaOrderPlace, env.TxID, payload)
+	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":          "filled",
-		"tx_id":           orderID,
-		"client_order_id": clientOrderID,
-		"fill_price":      fillPrice,
+	// ── OMS pré-trade: RESERVA atômica do saldo antes de enfileirar a ordem ──
+	// A reserva condicional (UPDATE ... WHERE balance-reserved >= amount) decide
+	// e aplica numa única instrução, sem janela de corrida. Liberada no evento
+	// terminal da ordem (filled/canceled/rejected) pelo consumer de eventos.
+	if claims, ok := ClaimsFromContext(r.Context()); ok && s.ledger != nil {
+		var reserveAsset string
+		var reserveAmt int64
+		var reason string
+		if req.Side == "sell" {
+			// Venda: reserva a quantidade do ativo base.
+			reserveAsset, reserveAmt, reason = baseAsset, int64(qty), "sell_quantity"
+		} else {
+			// Compra: reserva o notional em quote (preço × qtd, sem truncar).
+			var refPrice money.Amount
+			if req.Type == "limit" && price.IsPositive() {
+				refPrice = price
+			} else {
+				refPrice = money.Amount(s.veltra.MarketPriceFor(baseAsset))
+			}
+			if refPrice.IsPositive() {
+				notional, nerr := money.Notional(refPrice, qty)
+				if nerr != nil {
+					writeError(w, http.StatusBadRequest, "notional invalido: "+nerr.Error())
+					return
+				}
+				reserveAsset, reserveAmt, reason = quoteAsset, int64(notional), "buy_notional"
+			}
+		}
+		if reserveAmt > 0 {
+			ok, rerr := s.ledger.ReserveIfAvailable(r.Context(), claims.AccountID, reserveAsset, payload.ClientOrderID, reserveAmt, reason)
+			if rerr != nil {
+				log.Printf("[Gateway] OMS reserve(%s): %v", payload.ClientOrderID, rerr)
+				writeError(w, http.StatusServiceUnavailable, "erro ao reservar saldo")
+				return
+			}
+			if !ok {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("saldo insuficiente de %s para a ordem", reserveAsset))
+				return
+			}
+		}
+	}
+
+	// Publica o comando: TODOS os pares passam pelo matching engine real
+	// (CLOB determinístico + WAL), que é a única fonte da verdade (plano §4.3/4.4).
+	if err := s.publisher.Publish(r.Context(), messaging.ExchangeVeltraCommands, messaging.RKOrderPlace, env, nil); err != nil {
+		log.Printf("[Gateway] Falha ao publicar order.place: %v", err)
+		// Desfaz a reserva: a ordem não entrou.
+		if s.ledger != nil {
+			_ = s.ledger.ReleaseReserveByOrder(r.Context(), payload.ClientOrderID)
+		}
+		writeError(w, http.StatusServiceUnavailable, "broker indisponivel")
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":          "queued",
+		"tx_id":           env.TxID,
+		"client_order_id": payload.ClientOrderID,
 	})
 }
 

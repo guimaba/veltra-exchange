@@ -86,11 +86,20 @@
 - [x] **Invariante de dupla entrada**: `SUM(postings.amount) = 0` por operação (`trade` e `faucet` ambos = 0 ✅)
 - [x] **`go build ./...` + `go vet ./...`**: ok
 
-## 🟨 Fase 3 — OMS / Risco / Borda (PARCIAL — fatia vertical do frontend)
+## 🟦 Correções de integridade — revisão do conselho (2026-06-25)
 
-- [ ] **T3.1 — OMS pré-trade**
-  - Validação de saldo + **hold** (reserva) antes de encaminhar ao motor; liberação de hold em cancel/reject; risco por conta/par (limites)
-  - **Idempotência por `clientOrderId`** (mesmo mecanismo do TxID atual)
+Auditoria multi-perspectiva apontou furos que tornavam falsas promessas do plano. Corrigidos:
+- [x] **Bug do notional** (`cmd/ledger` + OMS do gateway): `price/scale*qty` truncava/zerava o notional e o evento `ledger.posted` divergia do saldo persistido. Agora usa `money.Notional` (multiplicação antes da divisão via big.Int) em todo lugar.
+- [x] **Idempotência real no ledger**: `UNIQUE(ledger_account_id, reference_id)` + `ON CONFLICT DO NOTHING` em `postEntryTx`. Redelivery do RabbitMQ não duplica mais saldo.
+- [x] **Settlement atômico**: base+quote do trade numa única transação (antes eram duas TX → risco de meio-trade).
+- [x] **Merkle determinístico**: folha não inclui mais `created_at` (relógio de parede); corrigido bug de aliasing no `append` do `ComputeMerkleRoot`.
+
+## ✅ Fase 3 — OMS / Risco / Borda
+
+- [x] **T3.1 — OMS pré-trade** *(2026-06-25)*
+  - **Reserva atômica condicional** (`ledger.ReserveIfAvailable`: `UPDATE ... WHERE balance-reserved >= amount`) antes de enfileirar — elimina a corrida TOCTOU (antes só havia um SELECT de validação)
+  - **Release** do hold em evento terminal (filled total / canceled / rejected) via `ReleaseReserveByOrder`, chaveado por `client_order_id`, no consumer do gateway
+  - **Idempotência por `clientOrderId`**: o `client_order_id` é fixado antes da reserva e propagado; a reserva é idempotente por ele
 - [x] **T3.2 — Gateway de trading (REST)** *(entregue na fatia vertical do frontend)*
   - `POST /api/orders`, `DELETE /api/orders/{id}`, `POST /api/faucet`, `GET /api/veltra/state` em `cmd/gateway/veltra_server.go`
   - Preço/quantidade entram como string decimal e viram inteiro escalado via `money.Parse` (cliente nunca faz conta de dinheiro em float)
@@ -110,7 +119,8 @@
   - Matching engine emite `book.updated` (snapshot L2 top-20 por comando)
   - Gateway consome `q.marketdata.events`: book L2, fita de trades (100), ordens, saldos-projeção, último preço
   - Saldos são PROJEÇÃO de exibição (faucet + trades); fonte de verdade contábil chega com o Ledger (Fase 2)
-- [ ] **T4.1b — `cmd/marketdata` dedicado**: extrair as projeções do gateway; candles/OHLCV por janela; cache Redis (plano §6)
+- [x] **Todos os pares no motor real (2026-06-25)**: removido o `simulateTrade` (forjava `trade.executed` fora do motor). Agora TODOS os pares passam pelo matching engine (CLOB determinístico + WAL). `cmd/marketdata` ganhou um **semeador de liquidez** (`SEED_LIQUIDITY=true`): financia a conta `liquidity` via faucet e coloca ordens resting nos dois lados de cada par. `PAIRS` no compose lista os 33 pares.
+- [ ] **T4.1b — `cmd/marketdata` dedicado**: candles/OHLCV por janela do log de trades; cache Redis (plano §6) — pendente
 - [x] **T4.2a — WebSocket fan-out (snapshot+eventos)**: hub existente reusado; `veltra_snapshot` no connect + eventos em tempo real
 - [ ] **T4.2b — Deltas incrementais de book** (hoje é snapshot L2 completo por update; otimizar para deltas)
 - [x] **T4.3 — Trading UI (Flutter Web)** *(`web/lib/screens/trade.dart` + `trading_state.dart`)*
@@ -127,11 +137,14 @@
 - [ ] **T5.3 — Surveillance educacional**: detecção de spoofing/layering/wash trading sobre o log de eventos
 - [ ] **T5.4 — Validação sob carga + determinismo**: teste de carga (latência alvo ms), replay completo do log comparando estados
 
-## 🔲 Fase 6 — Infraestrutura (POR ÚLTIMO, decisão do time)
+## ✅ Fase 6 — Infraestrutura (Terraform + Terragrunt) — 2026-06-25
 
-- [ ] **T6.1 — Terraform**: módulos AWS — Amazon MQ (RabbitMQ), ECS (um serviço por componente), RDS PostgreSQL, ElastiCache Redis (se usado), CloudFront/WAF na borda (plano §4.1/§6)
-- [ ] **T6.2 — Terragrunt**: composição por ambiente (dev/demo), estado remoto, DRY entre ambientes
-- [ ] **T6.3 — Pipeline de deploy**: build das imagens → push ECR → deploy ECS
+IaC em `infra/`. Entrega = `terraform validate` + `plan` (sem `apply`, evita custo). `terraform validate` ✅, `fmt` ✅.
+- [x] **T6.1 — Terraform**: módulos `network` (VPC/subnets/SG/VPC Endpoints, sem NAT), `ecr`, `rds` (PostgreSQL + senha no Secrets Manager), `mq` (Amazon MQ RabbitMQ), `ecs-cluster` (Cloud Map + roles IAM least-privilege), `ecs-service` (genérico, reusado 4×), `alb`. Stack em `infra/stack` mapeia Compose→AWS (gateway+ALB, matching single-task, ledger/marketdata Fargate Spot)
+- [x] **T6.2 — Terragrunt**: camada fina `live/dev` + `live/demo` reusa o mesmo stack variando inputs; estado remoto S3 (lock nativo) + provider gerado + `default_tags`
+- [x] **T6.3 — Pipeline de deploy**: documentado no `infra/README.md` (build → push ECR → `terragrunt apply`)
+- Secrets nunca no state (Secrets Manager por ARN); single-AZ + Spot + `destroy`-able. **`audit` fica fora do cloud** (depende do MariaDB legado, não está no plano §6)
+- ⚠️ Validação: `terraform validate` OK; `terragrunt`/`plan` exigem credenciais AWS + bucket de state criado (ver README)
 
 ---
 

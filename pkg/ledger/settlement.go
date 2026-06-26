@@ -43,16 +43,34 @@ func (l *Ledger) SettleTrade(
 	}
 	desc := fmt.Sprintf("trade settlement %s", tradeID)
 
+	// As pernas base e quote são liquidadas numa ÚNICA transação: ou ambas
+	// entram, ou nenhuma — nunca um meio-trade (plano §4.3: "move saldo de forma
+	// atômica"). Idempotente: se a perna base já foi aplicada (redelivery), a
+	// transação inteira é abortada sem reaplicar a quote.
+	tx, err := l.db.Conn().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("settlement begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
 	// Base: buyer +quantity, seller -quantity
-	if err := l.PostEntry(ctx, buyerBase.ID, sellerBase.ID, quantity, "trade", tradeID, desc); err != nil { //nolint:staticcheck
+	applied, err := l.postEntryTx(ctx, tx, buyerBase.ID, sellerBase.ID, quantity, "trade", tradeID, desc)
+	if err != nil {
 		return fmt.Errorf("settlement base posting: %w", err)
+	}
+	if !applied {
+		// Trade já liquidado anteriormente → idempotente, nada a fazer.
+		return nil
 	}
 
 	// Quote: seller +notional, buyer -notional
-	if err := l.PostEntry(ctx, sellerQuote.ID, buyerQuote.ID, int64(notional), "trade", tradeID+"-q", desc); err != nil {
+	if _, err := l.postEntryTx(ctx, tx, sellerQuote.ID, buyerQuote.ID, int64(notional), "trade", tradeID+"-q", desc); err != nil {
 		return fmt.Errorf("settlement quote posting: %w", err)
 	}
 
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("settlement commit: %w", err)
+	}
 	return nil
 }
 

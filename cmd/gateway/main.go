@@ -77,6 +77,10 @@ func main() {
 	hub := NewHub()
 	go hub.Run()
 
+	// HTTP server (criado antes dos consumers para que o consumer da Veltra
+	// possa liberar holds do OMS via server.ledger em eventos terminais).
+	server := NewServer(state, veltra, hub, publisher, authServer, staticDir)
+
 	// Consumer dos eventos da blockchain -> atualiza state + hub
 	consumer := messaging.NewConsumer(
 		client,
@@ -107,14 +111,14 @@ func main() {
 		},
 		func(ctx context.Context, env messaging.Envelope, d amqp.Delivery) error {
 			veltra.ApplyEvent(d.RoutingKey, env)
+			// OMS: libera a reserva quando a ordem fecha (filled/canceled/rejected).
+			releaseHoldOnTerminal(ctx, server.ledger, veltra, d.RoutingKey, env)
 			hub.PushEvent(d.RoutingKey, json.RawMessage(env.Payload))
 			return nil
 		},
 	)
 	veltraConsumer.Start(ctx)
 
-	// HTTP server
-	server := NewServer(state, veltra, hub, publisher, authServer, staticDir)
 	httpServer := &http.Server{
 		Addr:              ":" + port,
 		Handler:           server.Routes(),

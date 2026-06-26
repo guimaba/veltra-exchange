@@ -15,6 +15,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 
 	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/ledger"
 	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/messaging"
+	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/money"
 	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/pgstore"
 )
 
@@ -88,6 +90,10 @@ func main() {
 	)
 	consumer.Start(ctx)
 
+	// Auditoria: computa e persiste a Merkle root dos postings por período
+	// (plano §4.3 — "Merkle root por período habilita provas de auditoria").
+	go merkleLoop(ctx, l)
+
 	log.Printf("[Ledger] Pronto. Consumindo %s", messaging.QueueLedgerEvents)
 
 	sigCh := make(chan os.Signal, 1)
@@ -96,6 +102,38 @@ func main() {
 
 	log.Printf("[Ledger] Encerrando...")
 	consumer.Stop()
+}
+
+// merkleLoop computa e persiste a Merkle root dos postings a cada intervalo
+// (default 5 min; configurável via MERKLE_INTERVAL em segundos). Cada execução
+// cobre a janela [última execução, agora).
+func merkleLoop(ctx context.Context, l *ledger.Ledger) {
+	interval := 5 * time.Minute
+	if v := os.Getenv("MERKLE_INTERVAL"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			interval = time.Duration(n) * time.Second
+		}
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	last := time.Now()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			root, count, err := l.BuildAndSaveMerkleRoot(ctx, last, now)
+			if err != nil {
+				log.Printf("[Ledger] Merkle root falhou: %v", err)
+				continue
+			}
+			if count > 0 {
+				log.Printf("[Ledger] Merkle root [%s..%s]: %s (%d postings)",
+					last.Format("15:04:05"), now.Format("15:04:05"), root[:16]+"…", count)
+			}
+			last = now
+		}
+	}
 }
 
 func makeHandler(ctx context.Context, l *ledger.Ledger, pub *messaging.Publisher) messaging.Handler {
@@ -144,12 +182,20 @@ func handleTrade(ctx context.Context, l *ledger.Ledger, pub *messaging.Publisher
 		return messaging.Transient("erro no settlement do trade", err)
 	}
 
-	// Emite ledger.posted com os lançamentos
+	// Emite ledger.posted com os lançamentos. O notional DEVE ser o mesmo
+	// valor que o settlement persistiu (money.Notional, multiplicação antes da
+	// divisão por escala via big.Int) — caso contrário o evento/projeção diverge
+	// do saldo real gravado.
+	notionalAmt, err := money.Notional(money.Amount(p.Price), money.Amount(p.Quantity))
+	if err != nil {
+		return messaging.Transient("overflow ao calcular notional do ledger.posted", err)
+	}
+	notionalVal := int64(notionalAmt)
 	entries := []messaging.LedgerEntry{
 		{Account: buyer, Asset: baseAsset, Delta: p.Quantity},
 		{Account: seller, Asset: baseAsset, Delta: -p.Quantity},
-		{Account: seller, Asset: quoteAsset, Delta: notional(p.Price, p.Quantity)},
-		{Account: buyer, Asset: quoteAsset, Delta: -notional(p.Price, p.Quantity)},
+		{Account: seller, Asset: quoteAsset, Delta: notionalVal},
+		{Account: buyer, Asset: quoteAsset, Delta: -notionalVal},
 	}
 	_ = publishLedgerPosted(ctx, pub, p.TradeID, entries)
 
@@ -194,14 +240,6 @@ func parsePair(pair string) (string, string, error) {
 		}
 	}
 	return "", "", os.ErrInvalid
-}
-
-// notional calcula price * quantity / scale (preço do trade em quote asset)
-func notional(price, quantity int64) int64 {
-	// usa big.Int internamente via money.Notional
-	// aqui faz inline para não importar o pacote inteiro
-	const scale = 100_000_000
-	return price / scale * quantity
 }
 
 // ensureAdminAccount garante que existe um registro em auth.accounts com id=0
