@@ -11,6 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/ledger"
 	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/messaging"
 )
 
@@ -22,12 +23,18 @@ type Server struct {
 	veltra    *VeltraState
 	hub       *Hub
 	publisher *messaging.Publisher
-	auth      *AuthServer // nil quando Postgres não está configurado
+	auth      *AuthServer    // nil quando Postgres não está configurado
+	ledger    *ledger.Ledger // nil quando Postgres não está configurado (OMS/hold)
 	staticDir string
 }
 
 func NewServer(state *State, veltra *VeltraState, hub *Hub, pub *messaging.Publisher, auth *AuthServer, staticDir string) *Server {
-	return &Server{state: state, veltra: veltra, hub: hub, publisher: pub, auth: auth, staticDir: staticDir}
+	s := &Server{state: state, veltra: veltra, hub: hub, publisher: pub, auth: auth, staticDir: staticDir}
+	// OMS pré-trade compartilha o pool de conexões do auth (mesmo Postgres).
+	if auth != nil {
+		s.ledger = ledger.NewLedger(auth.db)
+	}
+	return s
 }
 
 func (s *Server) Routes() http.Handler {

@@ -54,7 +54,11 @@ CREATE TABLE IF NOT EXISTS ledger.postings (
 );
 
 CREATE INDEX idx_ledger_postings_account ON ledger.postings(ledger_account_id);
-CREATE INDEX idx_ledger_postings_reference ON ledger.postings(reference_id);  -- idempotência
+-- Idempotência REAL: cada (conta, referência) só pode ser lançada uma vez.
+-- Habilita ON CONFLICT DO NOTHING em ledger.postEntryTx → redelivery do RabbitMQ
+-- (entrega at-least-once) nunca duplica saldo. O débito e o crédito de um mesmo
+-- par usam a mesma reference_id em CONTAS diferentes, então não colidem entre si.
+CREATE UNIQUE INDEX idx_ledger_postings_account_ref ON ledger.postings(ledger_account_id, reference_id);
 CREATE INDEX idx_ledger_postings_created ON ledger.postings(created_at);
 
 COMMENT ON TABLE ledger.postings IS 'Lançamentos contábeis (sempre com contrapartida); base imutável';
