@@ -3,10 +3,12 @@
 // (inteiro escalado), nunca float64, conforme o plano tecnico (secao 4.2.2).
 //
 // Convencao de precificacao (estilo CLOB spot):
-//   - Em um par BASE/QUOTE (ex.: VLT/USDT-sim), a quantidade (Quantity) e medida
+//   - Em um par BASE/QUOTE (ex.: BTC/USD), a quantidade (Quantity) e medida
 //     em unidades do ativo BASE, e o preco (Price) em unidades de QUOTE por 1 BASE.
 //   - Comprar (Buy) gasta QUOTE e recebe BASE; vender (Sell) gasta BASE e recebe
 //     QUOTE.
+//   - As moedas de cotacao (QUOTE) sao as fiat USD, BRL e EUR: cada cripto
+//     negocia diretamente contra as tres (ex.: BTC/USD, BTC/BRL, BTC/EUR).
 package exchange
 
 import (
@@ -16,14 +18,29 @@ import (
 	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/money"
 )
 
-// Asset e o codigo de um ativo ficticio (ex.: "VLT", "USDT-sim").
+// Asset e o codigo de um ativo (ex.: "VLT", "BTC", "USD").
 type Asset string
 
 // Ativos nativos do ambiente simulado.
 const (
-	AssetVLT  Asset = "VLT"      // token nativo ficticio
-	AssetUSDT Asset = "USDT-sim" // stablecoin simulada usada como quote
+	AssetVLT Asset = "VLT" // token nativo ficticio
+	AssetUSD Asset = "USD" // dolar americano (moeda de cotacao)
+	AssetBRL Asset = "BRL" // real brasileiro (moeda de cotacao)
+	AssetEUR Asset = "EUR" // euro (moeda de cotacao)
 )
+
+// QuoteAssets sao as moedas fiat aceitas como cotacao (lado QUOTE de um par).
+var QuoteAssets = []Asset{AssetUSD, AssetBRL, AssetEUR}
+
+// IsQuoteAsset informa se o ativo pode ser usado como moeda de cotacao.
+func IsQuoteAsset(a Asset) bool {
+	for _, q := range QuoteAssets {
+		if a == q {
+			return true
+		}
+	}
+	return false
+}
 
 // Pair representa um par de negociacao BASE/QUOTE.
 type Pair struct {
@@ -31,7 +48,7 @@ type Pair struct {
 	Quote Asset `json:"quote"`
 }
 
-// String retorna o simbolo no formato "BASE/QUOTE" (ex.: "VLT/USDT-sim").
+// String retorna o simbolo no formato "BASE/QUOTE" (ex.: "BTC/USD").
 func (p Pair) String() string {
 	return string(p.Base) + "/" + string(p.Quote)
 }

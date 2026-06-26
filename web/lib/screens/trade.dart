@@ -23,6 +23,8 @@ class TradeScreen extends StatefulWidget {
 class _TradeScreenState extends State<TradeScreen> {
   final _priceCtrl = TextEditingController();
   String _selectedSymbol = 'VLT';
+  // Moeda de cotação selecionada (USD/BRL/EUR). Define o quote do par negociado.
+  String _selectedQuote = 'USD';
   List<Candle> _candles = [];
   bool _candlesLoading = false;
 
@@ -30,6 +32,10 @@ class _TradeScreenState extends State<TradeScreen> {
   void initState() {
     super.initState();
     _loadCandles('VLT');
+    // Sincroniza o par ativo no estado de trading com a seleção inicial.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) context.read<TradingState>().setPair('$_selectedSymbol/$_selectedQuote');
+    });
   }
 
   @override
@@ -38,10 +44,17 @@ class _TradeScreenState extends State<TradeScreen> {
   Future<void> _selectPair(String symbol) async {
     setState(() { _selectedSymbol = symbol; _candles = []; _candlesLoading = true; });
     // Troca o par ativo no estado de trading → book/fita/ordens reais do par.
-    context.read<TradingState>().setPair('$symbol/USDT-sim');
+    context.read<TradingState>().setPair('$symbol/$_selectedQuote');
     final market = context.read<MarketState>();
     final c = await market.loadCandles(symbol);
     if (mounted) setState(() { _candles = c; _candlesLoading = false; });
+  }
+
+  // Troca a moeda de cotação (USD/BRL/EUR) e reajusta o par ativo.
+  void _selectQuote(String quote) {
+    if (quote == _selectedQuote) return;
+    setState(() => _selectedQuote = quote);
+    context.read<TradingState>().setPair('$_selectedSymbol/$quote');
   }
 
   Future<void> _loadCandles(String symbol) async {
@@ -74,7 +87,8 @@ class _TradeScreenState extends State<TradeScreen> {
       // Main content
       Expanded(
         child: Column(children: [
-          _TopBar(symbol: _selectedSymbol, isVLT: _isVLT),
+          _TopBar(symbol: _selectedSymbol, isVLT: _isVLT,
+              quote: _selectedQuote, onQuote: _selectQuote),
           Expanded(
             child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               // Chart + tape
@@ -104,12 +118,13 @@ class _TradeScreenState extends State<TradeScreen> {
                 child: _TradingPanel(
                     priceCtrl: _priceCtrl,
                     symbol: _selectedSymbol,
-                    isVLT: _isVLT),
+                    isVLT: _isVLT,
+                    quote: _selectedQuote),
               ),
             ]),
           ),
           Container(height: 1, color: kBorder),
-          SizedBox(height: 200, child: _OrdersPanel(symbol: _selectedSymbol)),
+          SizedBox(height: 200, child: _OrdersPanel(symbol: _selectedSymbol, quote: _selectedQuote)),
         ]),
       ),
     ]);
@@ -117,7 +132,8 @@ class _TradeScreenState extends State<TradeScreen> {
 
   Widget _narrowLayout() {
     return ListView(children: [
-      _TopBar(symbol: _selectedSymbol, isVLT: _isVLT),
+      _TopBar(symbol: _selectedSymbol, isVLT: _isVLT,
+          quote: _selectedQuote, onQuote: _selectQuote),
       SizedBox(height: 50, child: _PairScrollRow(selected: _selectedSymbol, onSelect: _selectPair)),
       Container(height: 1, color: kBorder),
       SizedBox(
@@ -125,11 +141,11 @@ class _TradeScreenState extends State<TradeScreen> {
         child: _PriceChart(symbol: _selectedSymbol, candles: _candles, loading: _candlesLoading, isVLT: _isVLT),
       ),
       Container(height: 1, color: kBorder),
-      SizedBox(height: 360, child: _TradingPanel(priceCtrl: _priceCtrl, symbol: _selectedSymbol, isVLT: _isVLT)),
+      SizedBox(height: 360, child: _TradingPanel(priceCtrl: _priceCtrl, symbol: _selectedSymbol, isVLT: _isVLT, quote: _selectedQuote)),
       Container(height: 1, color: kBorder),
       SizedBox(height: 280, child: _TapePanel(symbol: _selectedSymbol)),
       Container(height: 1, color: kBorder),
-      SizedBox(height: 220, child: _OrdersPanel(symbol: _selectedSymbol)),
+      SizedBox(height: 220, child: _OrdersPanel(symbol: _selectedSymbol, quote: _selectedQuote)),
     ]);
   }
 }
@@ -336,18 +352,26 @@ class _PairScrollRow extends StatelessWidget {
 class _TopBar extends StatelessWidget {
   final String symbol;
   final bool isVLT;
-  const _TopBar({required this.symbol, required this.isVLT});
+  final String quote; // moeda de cotação selecionada (USD/BRL/EUR)
+  final void Function(String) onQuote;
+  const _TopBar({required this.symbol, required this.isVLT,
+      required this.quote, required this.onQuote});
 
   @override
   Widget build(BuildContext context) {
     final market = context.watch<MarketState>();
     final trading = context.watch<TradingState>();
     final coin = market.coins.where((c) => c.symbol == symbol).firstOrNull;
+    final fiat = fiatByCode(quote);
 
     // Preço do motor (último trade real) quando disponível; senão, referência de mercado.
+    // O motor cota o par no quote selecionado, então o lastPrice já está nessa moeda.
     final hasLive   = trading.lastPrice > 0;
+    // Preço de referência na moeda de cotação selecionada.
+    final priceQuote = hasLive
+        ? trading.lastPrice / 1e8
+        : (coin?.priceForQuote(quote) ?? 0);
     final priceUSD  = hasLive ? trading.lastPrice / 1e8 : (coin?.priceUSD ?? 0);
-    final priceBRL  = coin?.priceBRL ?? market.usdToBRL(priceUSD);
     final change24h = coin?.change24h ?? 0.0;
     final isUp      = change24h >= 0;
     final dirColor  = hasLive
@@ -363,7 +387,7 @@ class _TopBar extends StatelessWidget {
         Row(mainAxisSize: MainAxisSize.min, children: [
           _CoinDot(symbol),
           const SizedBox(width: 8),
-          Text('$symbol/USDT',
+          Text('$symbol/$quote',
               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: kTxt)),
           const SizedBox(width: 8),
           Container(
@@ -375,11 +399,15 @@ class _TopBar extends StatelessWidget {
                 fontWeight: FontWeight.w900, letterSpacing: 1)),
           ),
         ]),
-        const SizedBox(width: 20),
+        const SizedBox(width: 16),
 
-        // Price BRL
+        // Seletor de moeda de cotação (USD/BRL/EUR)
+        _QuoteSelector(quote: quote, onQuote: onQuote),
+        const SizedBox(width: 16),
+
+        // Preço na moeda de cotação selecionada
         Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('R\$ ${_fmtBRL(priceBRL)}',
+          Text('${fiat.symbol} ${_fmtBRL(priceQuote)}',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: dirColor,
                   fontFeatures: const [FontFeature.tabularFigures()])),
           Text('\$${_fmtUSD(priceUSD)}',
@@ -398,8 +426,8 @@ class _TopBar extends StatelessWidget {
         _Stat('24h', '${isUp ? '+' : ''}${change24h.toStringAsFixed(2)}%', isUp ? kBuy : kSell),
         const Spacer(),
 
-        // Saldo USDT-sim + botão depositar
-        _BalanceChip(),
+        // Saldo da moeda de cotação selecionada + botão depositar
+        _BalanceChip(quote: quote),
         const SizedBox(width: 12),
 
         // Account
@@ -430,6 +458,39 @@ class _TopBar extends StatelessWidget {
     if (v >= 1e6) return '${(v/1e6).toStringAsFixed(1)}M';
     if (v >= 1e3) return '${(v/1e3).toStringAsFixed(1)}K';
     return v.toStringAsFixed(0);
+  }
+}
+
+// ─── Quote selector (USD/BRL/EUR) ─────────────────────────────────────────────
+
+/// Seletor da moeda de cotação do par negociado. Usa SegmentedButton.
+class _QuoteSelector extends StatelessWidget {
+  final String quote;
+  final void Function(String) onQuote;
+  const _QuoteSelector({required this.quote, required this.onQuote});
+
+  @override
+  Widget build(BuildContext context) {
+    return SegmentedButton<String>(
+      segments: TradingState.quoteCurrencies
+          .map((q) => ButtonSegment<String>(
+                value: q,
+                label: Text(q, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+              ))
+          .toList(),
+      selected: {quote},
+      showSelectedIcon: false,
+      onSelectionChanged: (s) => onQuote(s.first),
+      style: ButtonStyle(
+        visualDensity: VisualDensity.compact,
+        padding: WidgetStateProperty.all(
+            const EdgeInsets.symmetric(horizontal: 8, vertical: 0)),
+        textStyle: WidgetStateProperty.all(const TextStyle(fontSize: 11)),
+        foregroundColor: WidgetStateProperty.resolveWith((states) =>
+            states.contains(WidgetState.selected) ? kBrand : kTxtSub),
+        side: WidgetStateProperty.all(const BorderSide(color: kBorder)),
+      ),
+    );
   }
 }
 
@@ -572,7 +633,9 @@ class _TradingPanel extends StatelessWidget {
   final TextEditingController priceCtrl;
   final String symbol;
   final bool isVLT;
-  const _TradingPanel({required this.priceCtrl, required this.symbol, required this.isVLT});
+  final String quote;
+  const _TradingPanel({required this.priceCtrl, required this.symbol,
+      required this.isVLT, required this.quote});
 
   @override
   Widget build(BuildContext context) {
@@ -587,7 +650,7 @@ class _TradingPanel extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
             decoration: BoxDecoration(color: kBrand.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-            child: Text('$symbol/USDT', style: const TextStyle(fontSize: 9, color: kBrand, fontWeight: FontWeight.w700)),
+            child: Text('$symbol/$quote', style: const TextStyle(fontSize: 9, color: kBrand, fontWeight: FontWeight.w700)),
           ),
         ]),
       ),
@@ -598,7 +661,7 @@ class _TradingPanel extends StatelessWidget {
             onPriceTap: (p) => priceCtrl.text = fmtAmount(p, minDecimals: 0)),
       ),
       Container(height: 1, color: kBorder),
-      Expanded(flex: 7, child: _OrderForm(priceCtrl: priceCtrl, symbol: symbol, isVLT: isVLT)),
+      Expanded(flex: 7, child: _OrderForm(priceCtrl: priceCtrl, symbol: symbol, isVLT: isVLT, quote: quote)),
     ]);
   }
 }
@@ -704,7 +767,9 @@ class _OrderForm extends StatefulWidget {
   final TextEditingController priceCtrl;
   final String symbol;
   final bool isVLT;
-  const _OrderForm({required this.priceCtrl, required this.symbol, required this.isVLT});
+  final String quote;
+  const _OrderForm({required this.priceCtrl, required this.symbol,
+      required this.isVLT, required this.quote});
   @override State<_OrderForm> createState() => _OrderFormState();
 }
 
@@ -747,12 +812,12 @@ class _OrderFormState extends State<_OrderForm> with SingleTickerProviderStateMi
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: const BorderSide(color: kBorder)),
         title: Text('${_isBuy ? 'Comprar' : 'Vender'} $base', style: TextStyle(color: _isBuy ? kBuy : kSell, fontSize: 16, fontWeight: FontWeight.w800)),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
-          _confirmRow('Par', '$base/USDT'),
+          _confirmRow('Par', '$base/${widget.quote}'),
           _confirmRow('Tipo', _type == 'limit' ? 'Limite' : 'A mercado'),
           _confirmRow('Quantidade', '${Fmt.qty(qty)} $base'),
           _confirmRow('Preço', _type == 'limit' ? Fmt.price(refPrice) : 'a mercado (~${Fmt.price(refPrice)})'),
           const Divider(height: 16, color: kBorder),
-          _confirmRow('Total estimado', '${Fmt.money(total)} USDT', bold: true),
+          _confirmRow('Total estimado', '${Fmt.money(total)} ${widget.quote}', bold: true),
         ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar', style: TextStyle(color: kTxtSub))),
@@ -781,7 +846,7 @@ class _OrderFormState extends State<_OrderForm> with SingleTickerProviderStateMi
     final t = context.read<TradingState>();
     setState(() => _sending = true);
     final ok = await t.placeOrder(
-      pair: '${widget.symbol}/USDT-sim',
+      pair: '${widget.symbol}/${widget.quote}',
       side: _side, type: _type,
       quantity: _qtyCtrl.text.trim().replaceAll(',', '.'),
       price: _type == 'limit' ? widget.priceCtrl.text.trim().replaceAll(',', '.') : '',
@@ -801,9 +866,9 @@ class _OrderFormState extends State<_OrderForm> with SingleTickerProviderStateMi
   Widget build(BuildContext context) {
     final t = context.watch<TradingState>();
     final actionColor = _isBuy ? kBuy : kSell;
-    // Para pares não-VLT, baseAsset = symbol, quoteAsset = USDT-sim
-    final baseAsset  = widget.isVLT ? t.baseAsset  : widget.symbol;
-    final quoteAsset = widget.isVLT ? t.quoteAsset : 'USDT-sim';
+    // baseAsset = símbolo da cripto; quoteAsset = moeda de cotação selecionada.
+    final baseAsset  = widget.symbol;
+    final quoteAsset = widget.quote;
 
     return Container(
       color: kSurface,
@@ -837,7 +902,7 @@ class _OrderFormState extends State<_OrderForm> with SingleTickerProviderStateMi
                 const SizedBox(width: 12),
                 _Bal(quoteAsset, t.balanceOf(quoteAsset)),
                 const Spacer(),
-                _FaucetInline(symbol: widget.symbol, isVLT: widget.isVLT),
+                _FaucetInline(symbol: widget.symbol, isVLT: widget.isVLT, quote: widget.quote),
               ]),
               const SizedBox(height: 10),
 
@@ -944,7 +1009,8 @@ class _Bal extends StatelessWidget {
 class _FaucetInline extends StatelessWidget {
   final String symbol;
   final bool isVLT;
-  const _FaucetInline({required this.symbol, required this.isVLT});
+  final String quote;
+  const _FaucetInline({required this.symbol, required this.isVLT, required this.quote});
 
   @override
   Widget build(BuildContext context) => GestureDetector(
@@ -964,8 +1030,8 @@ class _FaucetInline extends StatelessWidget {
   void _show(BuildContext context) {
     final t = context.read<TradingState>();
     final ac = TextEditingController(text: '1000');
-    // Para pares não-VLT: oferecer USDT-sim e o ativo em questão
-    final assets = isVLT ? [t.quoteAsset, t.baseAsset] : ['USDT-sim', symbol];
+    // Oferece a moeda de cotação selecionada e o ativo em questão.
+    final assets = [quote, symbol];
     String asset = assets.first;
     showDialog<void>(
       context: context,
@@ -1070,12 +1136,13 @@ class _H extends StatelessWidget {
 
 class _OrdersPanel extends StatelessWidget {
   final String symbol;
-  const _OrdersPanel({required this.symbol});
+  final String quote;
+  const _OrdersPanel({required this.symbol, required this.quote});
 
   @override
   Widget build(BuildContext context) {
     final t = context.watch<TradingState>();
-    final pair = '$symbol/USDT-sim';
+    final pair = '$symbol/$quote';
     // Filtra pelo par selecionado — todos os pares são reais agora.
     final open    = t.openOrders.where((o) => o.pair == pair).toList();
     final history = t.orderHistory.where((o) => o.pair == pair).toList();
@@ -1162,12 +1229,16 @@ class _SPill extends StatelessWidget {
 // ─── Balance chip (header) ────────────────────────────────────────────────────
 
 class _BalanceChip extends StatelessWidget {
+  final String quote;
+  const _BalanceChip({required this.quote});
+
   @override
   Widget build(BuildContext context) {
     final bal = context.watch<BalanceState>();
-    final usdt = bal.balanceOf('USDT-sim');
-    final brl = context.watch<MarketState>().usdToBRL(usdt);
-    final fmtUsdt = 'R\$ ${Fmt.money(brl)}';
+    final fiat = fiatByCode(quote);
+    // Saldo da moeda de cotação selecionada (creditada 1:1 no depósito).
+    final amount = bal.balanceOf(quote);
+    final fmtBal = '${fiat.symbol} ${Fmt.money(amount)}';
 
     return GestureDetector(
       onTap: () => showDialog(context: context, builder: (_) => const DepositDialog()),
@@ -1182,8 +1253,8 @@ class _BalanceChip extends StatelessWidget {
           const Icon(Icons.account_balance_wallet_outlined, size: 13, color: kTxtSub),
           const SizedBox(width: 5),
           Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            const Text('USDT', style: TextStyle(fontSize: 9, color: kTxtMuted)),
-            Text(usdt == 0 ? '—' : fmtUsdt,
+            Text(quote, style: const TextStyle(fontSize: 9, color: kTxtMuted)),
+            Text(amount == 0 ? '—' : fmtBal,
                 style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: kTxt,
                     fontFeatures: [FontFeature.tabularFigures()])),
           ]),

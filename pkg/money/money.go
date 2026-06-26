@@ -19,7 +19,7 @@ import (
 )
 
 // Decimals e o numero de casas decimais da menor unidade. 8 casas e o padrao de
-// mercado para ativos digitais (estilo satoshi) e cobre VLT e USDT-sim com folga.
+// mercado para ativos digitais (estilo satoshi) e cobre VLT e as moedas fiat com folga.
 const Decimals = 8
 
 // Scale = 10^Decimals. Fator de conversao entre unidade "humana" e menor unidade.

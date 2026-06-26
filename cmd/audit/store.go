@@ -31,7 +31,15 @@ func NewStore(ctx context.Context, dsn string) (*Store, error) {
 				db.SetMaxOpenConns(5)
 				db.SetMaxIdleConns(2)
 				db.SetConnMaxLifetime(5 * time.Minute)
-				return &Store{db: db}, nil
+				s := &Store{db: db}
+				// Auto-migra as tabelas que o audit usa. Em ambientes que sobem o
+				// MariaDB sem o init.sql (ex.: imagem stock no ECS/Fargate), isto
+				// garante o schema; e idempotente (IF NOT EXISTS).
+				if err = s.migrate(ctx); err != nil {
+					db.Close()
+					return nil, fmt.Errorf("falha ao migrar schema do audit: %w", err)
+				}
+				return s, nil
 			}
 			db.Close()
 		}
@@ -46,6 +54,34 @@ func NewStore(ctx context.Context, dsn string) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+// migrate cria (idempotente) as tabelas usadas pelo audit. Espelha o
+// docker/mariadb/init.sql para os ambientes que não o executam.
+func (s *Store) migrate(ctx context.Context) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS processed_messages (
+			tx_id        VARCHAR(64) NOT NULL,
+			consumer     VARCHAR(64) NOT NULL,
+			processed_at DATETIME(3) NOT NULL,
+			PRIMARY KEY (tx_id, consumer)
+		) ENGINE=InnoDB`,
+		`CREATE TABLE IF NOT EXISTS audit_events (
+			id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+			schema_id   VARCHAR(128) NOT NULL,
+			tx_id       VARCHAR(64) NULL,
+			payload     JSON NOT NULL,
+			recorded_at DATETIME(3) NOT NULL,
+			KEY idx_audit_schema (schema_id),
+			KEY idx_audit_tx     (tx_id)
+		) ENGINE=InnoDB`,
+	}
+	for _, q := range stmts {
+		if _, err := s.db.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // errAlreadyProcessed sinaliza que essa mensagem ja foi gravada por este consumer.
 var errAlreadyProcessed = errors.New("mensagem ja processada")

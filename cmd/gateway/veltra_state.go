@@ -70,6 +70,7 @@ type MarketCoin struct {
 	Name         string  `json:"name"`
 	PriceUSD     float64 `json:"price_usd"`
 	PriceBRL     float64 `json:"price_brl"`
+	PriceEUR     float64 `json:"price_eur"`
 	Change24h    float64 `json:"change_24h"`
 	Volume24hUSD float64 `json:"volume_24h_usd"`
 	MarketCapUSD float64 `json:"market_cap_usd"`
@@ -372,15 +373,24 @@ func (s *VeltraState) ClientOrderIDFor(orderID string) string {
 	return ""
 }
 
-// MarketPriceFor retorna o preco corrente de um ativo (em menor unidade) a
-// partir dos dados de market recebidos via market.update.
+// MarketPriceFor retorna o preco corrente de um ativo (em menor unidade) na
+// moeda de cotacao informada (USD/BRL/EUR), a partir do market.update.
 // Retorna 0 se o simbolo nao estiver na lista.
-func (s *VeltraState) MarketPriceFor(symbol string) int64 {
+func (s *VeltraState) MarketPriceFor(symbol, quote string) int64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, c := range s.marketCoins {
 		if c.Symbol == symbol {
-			return int64(c.PriceUSD * float64(money.Scale))
+			var px float64
+			switch quote {
+			case "BRL":
+				px = c.PriceBRL
+			case "EUR":
+				px = c.PriceEUR
+			default: // USD
+				px = c.PriceUSD
+			}
+			return int64(px * float64(money.Scale))
 		}
 	}
 	return 0
@@ -393,7 +403,7 @@ func (s *VeltraState) SyntheticBook(symbol string) (bids, asks []messaging.BookL
 	if symbol == "VLT" {
 		return nil, nil
 	}
-	px := s.MarketPriceFor(symbol)
+	px := s.MarketPriceFor(symbol, "USD")
 	if px == 0 {
 		return nil, nil
 	}

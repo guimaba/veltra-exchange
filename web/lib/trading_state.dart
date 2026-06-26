@@ -116,7 +116,10 @@ class TradingState extends ChangeNotifier {
 
   TradingState({required this.api, required this.ws});
 
-  static const String defaultPair = 'VLT/USDT-sim';
+  /// Moedas de cotação suportadas (fiat). Todo par é BASE/QUOTE com QUOTE aqui.
+  static const List<String> quoteCurrencies = ['USD', 'BRL', 'EUR'];
+
+  static const String defaultPair = 'BTC/USD';
 
   String _pair = defaultPair;
   String _account = 'alice';

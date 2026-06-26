@@ -17,7 +17,7 @@ terraform {
 # inputs por ambiente (dev/demo) via Terragrunt. Mapa Compose → AWS:
 #   rabbitmq  → Amazon MQ (RabbitMQ)        matching1-3 → 1 task Fargate (single-writer)
 #   postgres  → RDS PostgreSQL              gateway     → Fargate + ALB
-#   ledger/marketdata → Fargate             audit       → fora (depende do MariaDB legado)
+#   ledger/marketdata → Fargate             audit       → Fargate (+ MariaDB Fargate)
 # ============================================================================
 
 locals {
@@ -163,6 +163,59 @@ module "ledger" {
   desired_count      = 1
   use_spot           = true
   secrets            = merge(local.amqp_secret, local.pg_secret)
+  name               = local.svc_common.name
+  region             = local.svc_common.region
+  cluster_arn        = local.svc_common.cluster_arn
+  namespace_id       = local.svc_common.namespace_id
+  execution_role_arn = local.svc_common.execution_role_arn
+  task_role_arn      = local.svc_common.task_role_arn
+  log_group_name     = local.svc_common.log_group_name
+  security_group_id  = local.svc_common.security_group_id
+}
+
+# MariaDB (legado): banco do serviço de auditoria. Imagem stock do Docker Hub,
+# então roda em subnet pública com IP público para conseguir puxar a imagem
+# (sem NAT). Dados efêmeros — a trilha de auditoria é um log, recriável.
+# Descoberto via Cloud Map em mariadb.${var.env}.veltra.local:3306.
+module "mariadb" {
+  source           = "../modules/ecs-service"
+  service_name     = "mariadb"
+  image            = "mariadb:10.11"
+  subnet_ids       = module.network.public_subnet_ids
+  assign_public_ip = true
+  container_port   = 3306
+  desired_count    = 1
+  cpu              = 256
+  memory           = 512
+  environment = {
+    MARIADB_ROOT_PASSWORD = "root"
+    MARIADB_DATABASE      = "blockchain"
+    MARIADB_USER          = "blockchain"
+    MARIADB_PASSWORD      = "blockchain"
+  }
+  name               = local.svc_common.name
+  region             = local.svc_common.region
+  cluster_arn        = local.svc_common.cluster_arn
+  namespace_id       = local.svc_common.namespace_id
+  execution_role_arn = local.svc_common.execution_role_arn
+  task_role_arn      = local.svc_common.task_role_arn
+  log_group_name     = local.svc_common.log_group_name
+  security_group_id  = local.svc_common.security_group_id
+}
+
+# Audit (legado): consome todos os eventos e persiste a trilha no MariaDB.
+# Cria as próprias tabelas no boot (idempotente), então o MariaDB stock basta.
+module "audit" {
+  source        = "../modules/ecs-service"
+  service_name  = "audit"
+  image         = "${module.ecr.repository_urls["audit"]}:${var.image_tag}"
+  subnet_ids    = module.network.private_subnet_ids
+  desired_count = 1
+  use_spot      = true
+  environment = {
+    DB_DSN = "blockchain:blockchain@tcp(mariadb.${var.env}.veltra.local:3306)/blockchain?parseTime=true"
+  }
+  secrets            = local.amqp_secret
   name               = local.svc_common.name
   region             = local.svc_common.region
   cluster_arn        = local.svc_common.cluster_arn

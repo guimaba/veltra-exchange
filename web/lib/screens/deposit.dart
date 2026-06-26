@@ -107,7 +107,7 @@ class _DepositDialogState extends State<DepositDialog> {
         const SizedBox(width: 12),
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Depositar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: kTxt)),
-          const Text('Saldo creditado em USDT', style: TextStyle(fontSize: 11, color: kTxtSub)),
+          Text('Saldo creditado em $_currency', style: const TextStyle(fontSize: 11, color: kTxtSub)),
         ]),
         const Spacer(),
         IconButton(
@@ -260,11 +260,11 @@ class _DepositDialogState extends State<DepositDialog> {
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(color: kBrand.withOpacity(0.05),
             borderRadius: BorderRadius.circular(8), border: Border.all(color: kBrand.withOpacity(0.15))),
-        child: const Row(children: [
-          Icon(Icons.info_outline, size: 14, color: kBrand),
-          SizedBox(width: 8),
-          Expanded(child: Text('Simulação — nenhum valor real é cobrado. Saldo creditado em USDT (demo).',
-              style: TextStyle(fontSize: 11, color: kTxtSub))),
+        child: Row(children: [
+          const Icon(Icons.info_outline, size: 14, color: kBrand),
+          const SizedBox(width: 8),
+          Expanded(child: Text('Simulação — nenhum valor real é cobrado. Saldo creditado em $_currency (demo).',
+              style: const TextStyle(fontSize: 11, color: kTxtSub))),
         ]),
       ),
       const SizedBox(height: 20),

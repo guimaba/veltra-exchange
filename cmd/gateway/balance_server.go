@@ -3,7 +3,7 @@ package main
 // balance_server.go: endpoints de saldo e admin da Veltra Exchange.
 //
 //	GET  /api/balance           — saldo do usuário autenticado (fonte: Postgres ledger)
-//	POST /api/deposit           — simula depósito (credita USDT-sim via faucet)
+//	POST /api/deposit           — simula depósito (credita a fiat USD/BRL/EUR via faucet)
 //	GET  /api/admin/users       — lista todos os usuários com saldos (admin only)
 //	GET  /api/admin/stats       — estatísticas do sistema (admin only)
 
@@ -35,14 +35,13 @@ func (s *Server) balanceRoutes(mux *http.ServeMux) {
 	mux.Handle("/api/admin/promote", s.auth.RequireAuth(s.handleAdminPromote))
 }
 
-// fiatRates: unidades da moeda por 1 USD (USDT-sim ≡ USD). Taxas SIMULADAS e
-// fixas — nenhum valor é real. Depósito converte fiat → USDT-sim dividindo pela
-// taxa; saque converte USDT-sim (ou cripto avaliada a mercado) → fiat multiplicando.
+// fiatRates: unidades da moeda por 1 USD. Taxas SIMULADAS e fixas — nenhum valor
+// é real. São as moedas de cotação (USD/BRL/EUR): cada uma é um ativo próprio,
+// usado tanto para depósito/saque quanto como lado QUOTE dos pares de trading.
 var fiatRates = map[string]float64{
 	"USD": 1.00,
 	"BRL": 5.20,
 	"EUR": 0.92,
-	"GBP": 0.79,
 }
 
 func fiatRate(code string) (float64, bool) {
@@ -95,7 +94,8 @@ func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleDeposit simula um depósito: credita USDT-sim para o usuário autenticado.
+// handleDeposit simula um depósito: credita a moeda fiat (USD/BRL/EUR) 1:1 para
+// o usuário autenticado.
 func (s *Server) handleDeposit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
@@ -133,8 +133,8 @@ func (s *Server) handleDeposit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A moeda fiat é um ativo próprio: deposita R$/US$/€/£ → credita 1:1 esse
-	// ativo (sem converter para USDT). USDT só se obtém negociando.
+	// A moeda fiat é um ativo próprio: deposita R$/US$/€ → credita 1:1 esse
+	// ativo. As criptos só se obtêm negociando contra essa fiat.
 	txID, err := s.publishFaucet(r.Context(), claims.Username, currency, int64(amount))
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "erro ao processar depósito")
@@ -151,9 +151,8 @@ func (s *Server) handleDeposit(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleWithdraw simula um saque: debita um ativo (USDT-sim ou cripto, avaliada
-// a mercado) e devolve o valor equivalente na moeda fiat escolhida. Nenhum valor
-// real existe — é apenas a simulação do cash-out.
+// handleWithdraw simula um saque: debita uma moeda fiat (USD/BRL/EUR) 1:1 e
+// devolve o valor como cash-out. Nenhum valor real existe — é só a simulação.
 func (s *Server) handleWithdraw(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
@@ -172,9 +171,9 @@ func (s *Server) handleWithdraw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	asset := strings.ToUpper(req.Asset)
-	// Só moedas fiat podem ser sacadas (cripto/USDT só se mantém ou negocia).
+	// Só moedas fiat podem ser sacadas (cripto só se mantém ou negocia).
 	if _, ok := fiatRate(asset); !ok {
-		writeError(w, http.StatusBadRequest, "só é possível sacar moedas fiat (USD/BRL/EUR/GBP). Converta cripto na aba de trading.")
+		writeError(w, http.StatusBadRequest, "só é possível sacar moedas fiat (USD/BRL/EUR). Converta cripto na aba de trading.")
 		return
 	}
 	amount, err := money.Parse(req.Amount)
@@ -409,7 +408,7 @@ func (s *Server) handleAdminPromote(w http.ResponseWriter, r *http.Request) {
 // CheckSufficientBalance verifica se a conta tem saldo disponível suficiente
 // para a operação. Retorna erro descritivo se insuficiente.
 //
-//	side="buy"  → precisa de 'required' de quoteAsset (USDT-sim)
+//	side="buy"  → precisa de 'required' de quoteAsset (USD/BRL/EUR)
 //	side="sell" → precisa de 'required' de baseAsset (o token)
 func (s *Server) CheckSufficientBalance(ctx context.Context, accountID int64, asset string, required int64) error {
 	if s.auth == nil {

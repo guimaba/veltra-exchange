@@ -6,11 +6,12 @@ terraform {
   source = "${dirname(find_in_parent_folders())}//stack"
 }
 
-# Ambiente DEV: menor footprint possível, par único (matching mais leve).
+# Ambiente DEV: catálogo completo multi-quote — cada cripto negocia contra
+# USD, BRL e EUR (33 bases × 3 quotes = 99 pares).
 inputs = {
   env                = "dev"
   image_tag          = "latest"
-  pairs              = "VLT/USDT-sim"
+  pairs              = "VLT/USD,VLT/BRL,VLT/EUR,BTC/USD,BTC/BRL,BTC/EUR,ETH/USD,ETH/BRL,ETH/EUR,BNB/USD,BNB/BRL,BNB/EUR,SOL/USD,SOL/BRL,SOL/EUR,XRP/USD,XRP/BRL,XRP/EUR,ADA/USD,ADA/BRL,ADA/EUR,DOGE/USD,DOGE/BRL,DOGE/EUR,DOT/USD,DOT/BRL,DOT/EUR,AVAX/USD,AVAX/BRL,AVAX/EUR,POL/USD,POL/BRL,POL/EUR,LINK/USD,LINK/BRL,LINK/EUR,UNI/USD,UNI/BRL,UNI/EUR,LTC/USD,LTC/BRL,LTC/EUR,FIL/USD,FIL/BRL,FIL/EUR,ALGO/USD,ALGO/BRL,ALGO/EUR,XLM/USD,XLM/BRL,XLM/EUR,NEAR/USD,NEAR/BRL,NEAR/EUR,ICP/USD,ICP/BRL,ICP/EUR,APT/USD,APT/BRL,APT/EUR,ARB/USD,ARB/BRL,ARB/EUR,OP/USD,OP/BRL,OP/EUR,INJ/USD,INJ/BRL,INJ/EUR,SEI/USD,SEI/BRL,SEI/EUR,SUI/USD,SUI/BRL,SUI/EUR,TIA/USD,TIA/BRL,TIA/EUR,PEPE/USD,PEPE/BRL,PEPE/EUR,SHIB/USD,SHIB/BRL,SHIB/EUR,WIF/USD,WIF/BRL,WIF/EUR,JUP/USD,JUP/BRL,JUP/EUR,BONK/USD,BONK/BRL,BONK/EUR,TON/USD,TON/BRL,TON/EUR,TRX/USD,TRX/BRL,TRX/EUR"
   rds_instance_class = "db.t4g.micro"
   mq_instance_type   = "mq.t3.micro"
   enable_nat         = false
