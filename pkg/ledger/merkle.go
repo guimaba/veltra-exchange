@@ -28,7 +28,11 @@ func ComputeMerkleRoot(leaves []string) string {
 		}
 		var next [][]byte
 		for i := 0; i < len(hashes); i += 2 {
-			combined := append(hashes[i], hashes[i+1]...)
+			// Concatena numa fatia NOVA — append(hashes[i], ...) mutaria o array
+			// subjacente de hashes[i] (bug de aliasing) e corromperia a raiz.
+			combined := make([]byte, 0, len(hashes[i])+len(hashes[i+1]))
+			combined = append(combined, hashes[i]...)
+			combined = append(combined, hashes[i+1]...)
 			h := sha256.Sum256(combined)
 			next = append(next, h[:])
 		}
@@ -55,8 +59,12 @@ func (l *Ledger) SaveMerkleRoot(ctx context.Context, start, end time.Time, root 
 // BuildAndSaveMerkleRoot coleta todos os postings num período, computa a raiz
 // e persiste. Chamado periodicamente (ex: a cada hora) ou por demanda.
 func (l *Ledger) BuildAndSaveMerkleRoot(ctx context.Context, start, end time.Time) (string, int64, error) {
+	// A folha NÃO inclui created_at (relógio de parede): assim a raiz é
+	// reproduzível por replay do log de eventos — os campos restantes são
+	// determinísticos dada a sequência de eventos. created_at é usado apenas
+	// para delimitar o período auditado, não para o hash.
 	const q = `
-		SELECT CONCAT(id, ':', ledger_account_id, ':', amount, ':', operation_type, ':', COALESCE(reference_id,''), ':', created_at)
+		SELECT CONCAT(id, ':', ledger_account_id, ':', amount, ':', operation_type, ':', COALESCE(reference_id,''))
 		FROM ledger.postings
 		WHERE created_at >= $1 AND created_at < $2
 		ORDER BY id

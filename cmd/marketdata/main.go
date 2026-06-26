@@ -327,6 +327,11 @@ type service struct {
 	geckoIDs []string
 	// Mapa geckoID -> coinDef para montar o payload.
 	defByGeckoID map[string]coinDef
+
+	// seedLiq habilita a semeadura de liquidez (ordens resting por par).
+	seedLiq bool
+	// lastCoins guarda o último snapshot de moedas (para a semeadura inicial).
+	lastCoins []MarketCoin
 }
 
 func newService(publisher *messaging.Publisher, interval time.Duration) *service {
@@ -346,6 +351,7 @@ func newService(publisher *messaging.Publisher, interval time.Duration) *service
 		httpClient:   &http.Client{Timeout: 15 * time.Second},
 		geckoIDs:     ids,
 		defByGeckoID: defMap,
+		seedLiq:      os.Getenv("SEED_LIQUIDITY") == "true",
 	}
 }
 
@@ -356,6 +362,11 @@ func (svc *service) run(ctx context.Context) {
 	// Inicialização: busca preços e gera histórico.
 	if err := svc.tick(ctx, true); err != nil {
 		log.Printf("[MarketData] Aviso: falha no tick inicial: %v", err)
+	}
+
+	// Semeadura única de liquidez (após termos preços de referência).
+	if svc.seedLiq && len(svc.lastCoins) > 0 {
+		svc.seedLiquidity(ctx, svc.lastCoins)
 	}
 
 	ticker := time.NewTicker(svc.interval)
@@ -443,6 +454,8 @@ func (svc *service) tick(ctx context.Context, isFirst bool) error {
 		candleMap[coin.Symbol] = svc.store.last(coin.Symbol, publishCandles)
 	}
 
+	svc.lastCoins = coins
+
 	payload := MarketUpdatePayload{
 		Coins:     coins,
 		Candles:   candleMap,
@@ -463,6 +476,89 @@ func (svc *service) tick(ctx context.Context, isFirst bool) error {
 
 	log.Printf("[MarketData] Publicado market.update: %d moedas, updated_at=%d", len(coins), payload.UpdatedAt)
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Liquidity seeder (market maker da demo)
+// ---------------------------------------------------------------------------
+//
+// Promove TODOS os pares ao matching engine real (plano §4.2.2 "um motor por
+// par"): em vez de fills forjados no gateway, uma conta `liquidity` é financiada
+// por faucet e coloca ordens limite resting nos dois lados de cada par. Quando
+// um usuário negocia, ele casa contra essas ordens pelo CLOB determinístico —
+// trade.executed real, com WAL e settlement de dupla entrada.
+//
+// Semeadura ÚNICA no startup (bounded): mantém o book com profundidade inicial
+// sem churn de ordens. As ordens vão para q.matching.commands (durável), então
+// são processadas assim que o líder do matching estiver ativo.
+
+const liquidityAccount = "liquidity"
+
+// scaleOf converte um valor decimal (USD) para int64 escalado (money.Scale=1e8).
+func scaleOf(v float64) int64 { return int64(v * 1e8) }
+
+// seedLiquidity financia a conta de liquidez e coloca quotes nos dois lados de
+// cada par a partir dos preços de referência. levels níveis por lado.
+func (svc *service) seedLiquidity(ctx context.Context, coins []MarketCoin) {
+	const (
+		levels         = 3        // níveis de profundidade por lado
+		notionalPerLvl = 25_000.0 // ~USD por nível (define a quantidade)
+		fundUSDT       = 50_000_000.0
+	)
+
+	// 1. Financia a conta de liquidez com USDT-sim e cada ativo base.
+	svc.faucet(ctx, liquidityAccount, "USDT-sim", scaleOf(fundUSDT))
+	for _, c := range coins {
+		// Financia o ativo base com inventário suficiente para os asks.
+		baseQty := (notionalPerLvl * float64(levels) * 4) / c.PriceUSD
+		svc.faucet(ctx, liquidityAccount, c.Symbol, scaleOf(baseQty))
+	}
+
+	// 2. Coloca quotes resting por par (BASE/USDT-sim).
+	for _, c := range coins {
+		if c.PriceUSD <= 0 {
+			continue
+		}
+		pair := c.Symbol + "/USDT-sim"
+		qtyPerLvl := notionalPerLvl / c.PriceUSD
+		for i := 1; i <= levels; i++ {
+			off := 1.0 + float64(i)*0.002 // ±0.2%, 0.4%, 0.6%
+			svc.placeLimit(ctx, pair, "buy", scaleOf(c.PriceUSD/off), scaleOf(qtyPerLvl))
+			svc.placeLimit(ctx, pair, "sell", scaleOf(c.PriceUSD*off), scaleOf(qtyPerLvl))
+		}
+	}
+	log.Printf("[MarketData] Liquidez semeada: %d pares, %d níveis/lado", len(coins), levels)
+}
+
+// faucet publica faucet.credit (emissão de saldo virtual) para a conta.
+func (svc *service) faucet(ctx context.Context, account, asset string, amount int64) {
+	if amount <= 0 {
+		return
+	}
+	env, err := messaging.NewEnvelope(messaging.SchemaFaucetCredit, "", messaging.FaucetCreditPayload{
+		Account: account, Asset: asset, Amount: amount,
+	})
+	if err != nil {
+		return
+	}
+	_ = svc.publisher.Publish(ctx, messaging.ExchangeVeltraEvents, messaging.RKFaucetCredit, env, nil)
+}
+
+// placeLimit publica order.place (GTC) no exchange de comandos da Veltra.
+func (svc *service) placeLimit(ctx context.Context, pair, side string, price, qty int64) {
+	env, err := messaging.NewEnvelope(messaging.SchemaOrderPlace, "", messaging.OrderPlacePayload{
+		Account:     liquidityAccount,
+		Pair:        pair,
+		Side:        side,
+		Type:        "limit",
+		TimeInForce: "gtc",
+		Price:       price,
+		Quantity:    qty,
+	})
+	if err != nil {
+		return
+	}
+	_ = svc.publisher.Publish(ctx, messaging.ExchangeVeltraCommands, messaging.RKOrderPlace, env, nil)
 }
 
 // ---------------------------------------------------------------------------

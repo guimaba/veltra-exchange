@@ -1,11 +1,19 @@
-# Orquestração completa do sistema (Etapa de Mensageria).
-# Sobe: 3 nós blockchain + MariaDB + RabbitMQ + gateway + auditoria.
+# Orquestração da Veltra Exchange (simulador de exchange spot).
+# Serviços Veltra: RabbitMQ + PostgreSQL + matching engine (3 réplicas) +
+#   ledger + market data + gateway (REST/WS + Flutter Web).
+# Serviços LEGADOS (base blockchain — Sistemas Distribuídos): node1-3 + MariaDB
+#   + audit. Mantidos aqui porque o gateway é compartilhado (serve as duas UIs);
+#   estão agrupados e marcados como [LEGADO] abaixo para separação visual.
 # Uso: docker compose up --build
 # Acesso:
 #   - Aplicação Flutter Web ......... http://localhost:8080
 #   - API REST do gateway ........... http://localhost:8080/api
 #   - WebSocket de eventos .......... ws://localhost:8080/ws
 #   - Painel RabbitMQ Management .... http://localhost:15672  (admin / admin)
+
+# Pares negociados: VLT/USDT-sim (par nativo) + catálogo de 32 ativos contra
+# USDT-sim. TODOS passam pelo matching engine real (CLOB determinístico).
+x-veltra-pairs: &veltra_pairs "VLT/USDT-sim,BTC/USDT-sim,ETH/USDT-sim,BNB/USDT-sim,SOL/USDT-sim,XRP/USDT-sim,ADA/USDT-sim,DOGE/USDT-sim,DOT/USDT-sim,AVAX/USDT-sim,POL/USDT-sim,LINK/USDT-sim,UNI/USDT-sim,LTC/USDT-sim,FIL/USDT-sim,ALGO/USDT-sim,XLM/USDT-sim,NEAR/USDT-sim,ICP/USDT-sim,APT/USDT-sim,ARB/USDT-sim,OP/USDT-sim,INJ/USDT-sim,SEI/USDT-sim,SUI/USDT-sim,TIA/USDT-sim,PEPE/USDT-sim,SHIB/USDT-sim,WIF/USDT-sim,JUP/USDT-sim,BONK/USDT-sim,TON/USDT-sim,TRX/USDT-sim"
 
 services:
   # -------------------------------------------------------------
@@ -191,6 +199,8 @@ services:
     container_name: veltra-marketdata
     environment:
       AMQP_URL: "amqp://marketdata:marketdata-pw@rabbitmq:5672/%2Fblockchain"
+      # Semeia liquidez (ordens resting por par) ao subir, financiada por faucet.
+      SEED_LIQUIDITY: "true"
     depends_on:
       rabbitmq: { condition: service_healthy }
     networks: [blockchain-net]
@@ -226,7 +236,7 @@ services:
       NODE_PORT: 9101
       PEERS: "2:matching2:9102,3:matching3:9103"
       AMQP_URL: "amqp://matching:matching-pw@rabbitmq:5672/%2Fblockchain"
-      PAIRS: "VLT/USDT-sim"
+      PAIRS: *veltra_pairs
       WAL_DIR: /data/matching
       SNAPSHOT_EVERY: 100
     volumes:
@@ -245,7 +255,7 @@ services:
       NODE_PORT: 9102
       PEERS: "1:matching1:9101,3:matching3:9103"
       AMQP_URL: "amqp://matching:matching-pw@rabbitmq:5672/%2Fblockchain"
-      PAIRS: "VLT/USDT-sim"
+      PAIRS: *veltra_pairs
       WAL_DIR: /data/matching
       SNAPSHOT_EVERY: 100
     volumes:
@@ -264,7 +274,7 @@ services:
       NODE_PORT: 9103
       PEERS: "1:matching1:9101,2:matching2:9102"
       AMQP_URL: "amqp://matching:matching-pw@rabbitmq:5672/%2Fblockchain"
-      PAIRS: "VLT/USDT-sim"
+      PAIRS: *veltra_pairs
       WAL_DIR: /data/matching
       SNAPSHOT_EVERY: 100
     volumes:
