@@ -275,6 +275,8 @@ func logging(next http.Handler) http.Handler {
 // o roteador do Flutter Web assuma o controle.
 func spaFallback(staticDir string, fs http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Sempre revalida: evita o navegador servir um build antigo do Flutter.
+		w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 		if r.URL.Path != "/" {
 			path := filepath.Join(staticDir, filepath.Clean(r.URL.Path))
 			info, err := os.Stat(path)

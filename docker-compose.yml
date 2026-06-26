@@ -13,7 +13,7 @@
 
 # Pares negociados: VLT/USDT-sim (par nativo) + catálogo de 32 ativos contra
 # USDT-sim. TODOS passam pelo matching engine real (CLOB determinístico).
-x-veltra-pairs: &veltra_pairs "VLT/USDT-sim,BTC/USDT-sim,ETH/USDT-sim,BNB/USDT-sim,SOL/USDT-sim,XRP/USDT-sim,ADA/USDT-sim,DOGE/USDT-sim,DOT/USDT-sim,AVAX/USDT-sim,POL/USDT-sim,LINK/USDT-sim,UNI/USDT-sim,LTC/USDT-sim,FIL/USDT-sim,ALGO/USDT-sim,XLM/USDT-sim,NEAR/USDT-sim,ICP/USDT-sim,APT/USDT-sim,ARB/USDT-sim,OP/USDT-sim,INJ/USDT-sim,SEI/USDT-sim,SUI/USDT-sim,TIA/USDT-sim,PEPE/USDT-sim,SHIB/USDT-sim,WIF/USDT-sim,JUP/USDT-sim,BONK/USDT-sim,TON/USDT-sim,TRX/USDT-sim"
+x-veltra-pairs: &veltra_pairs "USD/USDT-sim,BRL/USDT-sim,EUR/USDT-sim,GBP/USDT-sim,VLT/USDT-sim,BTC/USDT-sim,ETH/USDT-sim,BNB/USDT-sim,SOL/USDT-sim,XRP/USDT-sim,ADA/USDT-sim,DOGE/USDT-sim,DOT/USDT-sim,AVAX/USDT-sim,POL/USDT-sim,LINK/USDT-sim,UNI/USDT-sim,LTC/USDT-sim,FIL/USDT-sim,ALGO/USDT-sim,XLM/USDT-sim,NEAR/USDT-sim,ICP/USDT-sim,APT/USDT-sim,ARB/USDT-sim,OP/USDT-sim,INJ/USDT-sim,SEI/USDT-sim,SUI/USDT-sim,TIA/USDT-sim,PEPE/USDT-sim,SHIB/USDT-sim,WIF/USDT-sim,JUP/USDT-sim,BONK/USDT-sim,TON/USDT-sim,TRX/USDT-sim"
 
 services:
   # -------------------------------------------------------------
@@ -183,6 +183,7 @@ services:
     environment:
       AMQP_URL: "amqp://ledger:ledger-pw@rabbitmq:5672/%2Fblockchain"
       POSTGRES_DSN: "postgres://veltra:veltra@postgres:5432/veltra?sslmode=disable"
+      MERKLE_INTERVAL: "60" # computa a Merkle root a cada 60s (demo; default 5min)
     depends_on:
       rabbitmq: { condition: service_healthy }
       postgres:  { condition: service_healthy }

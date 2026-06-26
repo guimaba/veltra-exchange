@@ -56,6 +56,16 @@ func main() {
 
 	l := ledger.NewLedger(db)
 
+	// Aplica o schema se ainda não existe (RDS não roda os scripts de init do
+	// Compose). No Compose isto é no-op: o initdb já criou o schema.
+	schemaDir := os.Getenv("SCHEMA_DIR")
+	if schemaDir == "" {
+		schemaDir = "/schema"
+	}
+	if err := db.Migrate(ctx, schemaDir); err != nil {
+		log.Fatalf("[Ledger] Falha na migração do schema: %v", err)
+	}
+
 	// Garante conta admin (trading_account_id=0) no auth.accounts antes de usar
 	if err := ensureAdminAccount(ctx, db); err != nil {
 		log.Fatalf("[Ledger] Falha ao garantir conta admin: %v", err)
@@ -74,6 +84,11 @@ func main() {
 		log.Fatalf("[Ledger] Falha ao conectar ao RabbitMQ: %v", err)
 	}
 	defer client.Close()
+
+	// Declara a topologia (Amazon MQ não importa definitions.json). Idempotente.
+	if err := client.DeclareTopology(); err != nil {
+		log.Printf("[Ledger] Aviso: topologia nao declarada (%v) - ok se ja existir", err)
+	}
 
 	publisher := messaging.NewPublisher(client)
 	defer publisher.Close()
@@ -257,8 +272,10 @@ func ensureAdminAccount(ctx context.Context, db *pgstore.DB) error {
 	return err
 }
 
-// allAssets lista todos os 33 ativos + USDT-sim suportados na exchange simulada.
+// allAssets lista todos os ativos suportados: moedas fiat (depósito/saque),
+// USDT-sim (quote de trading) e as criptos (só negociáveis).
 var allAssets = []string{
+	"USD", "BRL", "EUR", "GBP", // moedas fiat (ativos reais de depósito/saque)
 	"USDT-sim",
 	"VLT", "BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE", "DOT", "AVAX",
 	"POL", "LINK", "UNI", "LTC", "FIL", "ALGO", "XLM", "NEAR", "ICP", "APT",

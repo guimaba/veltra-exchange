@@ -86,11 +86,27 @@ class ApiClient {
   Future<Map<String, dynamic>> deposit({
     required String amount,
     required String method,
+    String currency = 'BRL',
   }) async {
     final res = await _http.post(
       Uri.parse('${_baseUrl()}/api/deposit'),
       headers: _authHeaders,
-      body: jsonEncode({'amount': amount, 'method': method}),
+      body: jsonEncode({'amount': amount, 'method': method, 'currency': currency}),
+    );
+    _check(res);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Saque simulado: debita o ativo e devolve o valor equivalente na moeda fiat.
+  Future<Map<String, dynamic>> withdraw({
+    required String asset,
+    required String amount,
+    String currency = 'BRL',
+  }) async {
+    final res = await _http.post(
+      Uri.parse('${_baseUrl()}/api/withdraw'),
+      headers: _authHeaders,
+      body: jsonEncode({'asset': asset, 'amount': amount, 'currency': currency}),
     );
     _check(res);
     return jsonDecode(res.body) as Map<String, dynamic>;
@@ -108,6 +124,33 @@ class ApiClient {
         headers: _authHeaders);
     _check(res);
     return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Admin: ajusta o saldo de um usuário (amount com sinal; "-100" debita).
+  Future<void> adminCredit({
+    required String username,
+    required String asset,
+    required String amount,
+  }) async {
+    final res = await _http.post(
+      Uri.parse('${_baseUrl()}/api/admin/credit'),
+      headers: _authHeaders,
+      body: jsonEncode({'username': username, 'asset': asset, 'amount': amount}),
+    );
+    _check(res);
+  }
+
+  /// Admin: promove/rebaixa um usuário.
+  Future<void> adminPromote({
+    required String username,
+    required bool isAdmin,
+  }) async {
+    final res = await _http.post(
+      Uri.parse('${_baseUrl()}/api/admin/promote'),
+      headers: _authHeaders,
+      body: jsonEncode({'username': username, 'is_admin': isAdmin}),
+    );
+    _check(res);
   }
 
   // ===== Market data =====

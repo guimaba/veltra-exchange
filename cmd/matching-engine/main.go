@@ -56,6 +56,11 @@ func main() {
 	}
 	defer client.Close()
 
+	// Declara a topologia (Amazon MQ não importa definitions.json). Idempotente.
+	if err := client.DeclareTopology(); err != nil {
+		log.Printf("[Matching %d] Aviso: topologia nao declarada (%v) - ok se ja existir", cfg.ID, err)
+	}
+
 	publisher := messaging.NewPublisher(client)
 	defer publisher.Close()
 

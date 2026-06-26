@@ -19,7 +19,9 @@ RUN flutter pub get
 COPY web/ ./
 
 # Build em modo release. Output em build/web/
-RUN flutter build web --release
+# --pwa-strategy=none: sem service worker, evitando que o navegador sirva um
+# build antigo em cache (essencial durante iteração rápida do front).
+RUN flutter build web --release --pwa-strategy=none
 
 # ---------- Stage 2: build do binário Go ----------
 FROM golang:1.25-alpine AS go-builder

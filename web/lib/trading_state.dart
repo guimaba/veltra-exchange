@@ -121,33 +121,51 @@ class TradingState extends ChangeNotifier {
   String _pair = defaultPair;
   String _account = 'alice';
 
-  List<BookLevel> _bids = const [];
-  List<BookLevel> _asks = const [];
-  int _bookSequence = 0;
-  final List<TradeTick> _trades = [];
+  // Estado POR PAR: o backend publica book/trades de TODOS os pares (o matching
+  // engine processa os 33 pares no CLOB real). Guardamos tudo indexado por par
+  // para que a troca de par na UI seja instantânea e sem perda de dados.
+  final Map<String, List<BookLevel>> _bidsByPair = {};
+  final Map<String, List<BookLevel>> _asksByPair = {};
+  final Map<String, int> _bookSeqByPair = {};
+  final Map<String, List<TradeTick>> _tradesByPair = {};
+  final Map<String, int> _lastPriceByPair = {};
+  final Map<String, int> _prevPriceByPair = {};
   final Map<String, OrderInfo> _orders = {};
   final Map<String, Map<String, num>> _balances = {};
-  int _lastPrice = 0;
-  int _prevPrice = 0;
   String? _lastError;
   String? _lastNotice;
 
   StreamSubscription? _sub;
 
-  // ----- getters -----
+  // ----- getters (sempre do par selecionado) -----
   String get pair => _pair;
   String get account => _account;
-  List<BookLevel> get bids => _bids;
-  List<BookLevel> get asks => _asks;
-  List<TradeTick> get trades => List.unmodifiable(_trades);
-  int get lastPrice => _lastPrice;
+  List<BookLevel> get bids => _bidsByPair[_pair] ?? const [];
+  List<BookLevel> get asks => _asksByPair[_pair] ?? const [];
+  List<TradeTick> get trades =>
+      List.unmodifiable(_tradesByPair[_pair] ?? const <TradeTick>[]);
+  int get lastPrice => _lastPriceByPair[_pair] ?? 0;
+  int get _prevPrice => _prevPriceByPair[_pair] ?? 0;
 
   /// 1 = subiu, -1 = caiu, 0 = neutro (cor do last price).
   int get priceDirection =>
-      _lastPrice == _prevPrice ? 0 : (_lastPrice > _prevPrice ? 1 : -1);
+      lastPrice == _prevPrice ? 0 : (lastPrice > _prevPrice ? 1 : -1);
 
-  int? get bestBid => _bids.isEmpty ? null : _bids.first.price;
-  int? get bestAsk => _asks.isEmpty ? null : _asks.first.price;
+  /// Último preço de um par específico (para listas/topbar de qualquer par).
+  int lastPriceOf(String pair) => _lastPriceByPair[pair] ?? 0;
+
+  /// Todos os trades de TODOS os pares (mais recentes primeiro) — para a carteira.
+  List<TradeTick> get allTrades {
+    final all = <TradeTick>[];
+    for (final list in _tradesByPair.values) {
+      all.addAll(list);
+    }
+    all.sort((a, b) => b.timestampMs.compareTo(a.timestampMs));
+    return all;
+  }
+
+  int? get bestBid => bids.isEmpty ? null : bids.first.price;
+  int? get bestAsk => asks.isEmpty ? null : asks.first.price;
   int? get spread => (bestBid != null && bestAsk != null) ? bestAsk! - bestBid! : null;
 
   String? get lastError => _lastError;
@@ -195,6 +213,14 @@ class TradingState extends ChangeNotifier {
   void setAccount(String account) {
     if (account.isEmpty || account == _account) return;
     _account = account;
+    notifyListeners();
+  }
+
+  /// Troca o par ativo. Os dados de todos os pares já estão em memória, então a
+  /// troca é instantânea (sem nova requisição).
+  void setPair(String pair) {
+    if (pair.isEmpty || pair == _pair) return;
+    _pair = pair;
     notifyListeners();
   }
 
@@ -253,17 +279,24 @@ class TradingState extends ChangeNotifier {
   }
 
   void _applySnapshot(Map<String, dynamic> snap) {
+    // Books de TODOS os pares.
     final books = snap['books'];
-    if (books is Map && books[_pair] is Map) {
-      _applyBook((books[_pair] as Map).cast<String, dynamic>());
+    if (books is Map) {
+      books.forEach((pair, b) {
+        if (b is Map) _applyBook(b.cast<String, dynamic>());
+      });
     }
+    // Fitas de trades de TODOS os pares.
     final trades = snap['trades'];
-    if (trades is Map && trades[_pair] is List) {
-      _trades
-        ..clear()
-        ..addAll((trades[_pair] as List)
-            .cast<Map<String, dynamic>>()
-            .map(TradeTick.fromJson));
+    if (trades is Map) {
+      trades.forEach((pair, list) {
+        if (list is List) {
+          _tradesByPair[pair.toString()] = list
+              .cast<Map<String, dynamic>>()
+              .map(TradeTick.fromJson)
+              .toList();
+        }
+      });
     }
     final orders = snap['orders'];
     if (orders is List) {
@@ -283,22 +316,27 @@ class TradingState extends ChangeNotifier {
       });
     }
     final lastPx = snap['last_price'];
-    if (lastPx is Map && lastPx[_pair] is num) {
-      _lastPrice = (lastPx[_pair] as num).toInt();
-      _prevPrice = _lastPrice;
+    if (lastPx is Map) {
+      lastPx.forEach((pair, px) {
+        if (px is num) {
+          _lastPriceByPair[pair.toString()] = px.toInt();
+          _prevPriceByPair[pair.toString()] = px.toInt();
+        }
+      });
     }
   }
 
   void _applyBook(Map<String, dynamic> data) {
-    if ((data['pair'] as String? ?? '') != _pair) return;
+    final pair = data['pair'] as String? ?? '';
+    if (pair.isEmpty) return;
     final seq = (data['sequence'] as num? ?? 0).toInt();
-    if (seq < _bookSequence) return; // update atrasado
-    _bookSequence = seq;
-    _bids = ((data['bids'] as List?) ?? const [])
+    if (seq < (_bookSeqByPair[pair] ?? 0)) return; // update atrasado
+    _bookSeqByPair[pair] = seq;
+    _bidsByPair[pair] = ((data['bids'] as List?) ?? const [])
         .cast<Map<String, dynamic>>()
         .map(BookLevel.fromJson)
         .toList();
-    _asks = ((data['asks'] as List?) ?? const [])
+    _asksByPair[pair] = ((data['asks'] as List?) ?? const [])
         .cast<Map<String, dynamic>>()
         .map(BookLevel.fromJson)
         .toList();
@@ -306,13 +344,18 @@ class TradingState extends ChangeNotifier {
 
   void _applyTrade(Map<String, dynamic> data) {
     final t = TradeTick.fromJson(data);
-    if (t.pair != _pair) return;
-    _prevPrice = _lastPrice == 0 ? t.price : _lastPrice;
-    _lastPrice = t.price;
-    _trades.insert(0, t);
-    if (_trades.length > 100) _trades.removeLast();
+    if (t.pair.isEmpty) return;
+    final prev = _lastPriceByPair[t.pair] ?? 0;
+    _prevPriceByPair[t.pair] = prev == 0 ? t.price : prev;
+    _lastPriceByPair[t.pair] = t.price;
+    final tape = _tradesByPair.putIfAbsent(t.pair, () => <TradeTick>[]);
+    tape.insert(0, t);
+    if (tape.length > 100) tape.removeLast();
 
-    // Atualiza a projecao local de saldos das duas pontas.
+    // Atualiza a projecao local de saldos das duas pontas (do par DO TRADE).
+    final parts = t.pair.split('/');
+    if (parts.length != 2) return;
+    final tBase = parts[0], tQuote = parts[1];
     final notionalScaled =
         (t.price / moneyScale) * t.quantity; // exibicao apenas
     final buyer = data[t.takerSide == 'buy' ? 'taker_account' : 'maker_account']
@@ -328,10 +371,10 @@ class TradingState extends ChangeNotifier {
       _balances[acc]![asset] = (_balances[acc]![asset] ?? 0) + delta;
     }
 
-    move(buyer, baseAsset, t.quantity);
-    move(buyer, quoteAsset, -notionalScaled);
-    move(seller, baseAsset, -t.quantity);
-    move(seller, quoteAsset, notionalScaled);
+    move(buyer, tBase, t.quantity);
+    move(buyer, tQuote, -notionalScaled);
+    move(seller, tBase, -t.quantity);
+    move(seller, tQuote, notionalScaled);
   }
 
   // ----- acoes -----
@@ -366,7 +409,7 @@ class TradingState extends ChangeNotifier {
 
   Future<void> cancelOrder(OrderInfo o) async {
     try {
-      await api.cancelOrder(orderId: o.orderId, account: _account, pair: _pair);
+      await api.cancelOrder(orderId: o.orderId, account: _account, pair: o.pair);
     } catch (e) {
       _lastError = e.toString();
       notifyListeners();

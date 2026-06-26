@@ -16,8 +16,9 @@ variable "engine_version" {
 }
 
 variable "instance_type" {
-  type    = string
-  default = "mq.t3.micro"
+  type = string
+  # RabbitMQ no Amazon MQ não oferece t3.micro; m7g.medium (Graviton) é o menor.
+  default = "mq.m7g.medium"
 }
 
 variable "username" {

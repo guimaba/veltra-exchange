@@ -85,6 +85,18 @@ class MarketState extends ChangeNotifier {
   int get updatedAt => _updatedAt;
   String get search => _search;
 
+  /// Taxa USD→BRL REAL, derivada dos preços da CoinGecko (priceBRL/priceUSD de
+  /// qualquer moeda). Fallback 5,20 (mesma do backend) se não houver dados.
+  double get usdToBrl {
+    for (final c in _coins) {
+      if (c.priceUSD > 0 && c.priceBRL > 0) return c.priceBRL / c.priceUSD;
+    }
+    return 5.20;
+  }
+
+  /// Converte um valor em USD/USDT para BRL usando a taxa real corrente.
+  double usdToBRL(num usd) => usd * usdToBrl;
+
   void setSearch(String v) {
     _search = v;
     notifyListeners();

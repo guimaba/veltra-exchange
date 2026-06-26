@@ -3,10 +3,12 @@ import 'package:provider/provider.dart';
 
 import '../auth_state.dart';
 import '../balance_state.dart';
+import '../fmt.dart';
 import '../market_state.dart';
 import '../theme.dart';
 import '../trading_state.dart';
 import 'deposit.dart';
+import 'withdraw.dart';
 
 class WalletScreen extends StatelessWidget {
   const WalletScreen();
@@ -26,7 +28,7 @@ class WalletScreen extends StatelessWidget {
       if (coin != null) {
         totalBRL += b.balanceDecimal * coin.priceBRL;
       } else if (b.asset == 'USDT-sim') {
-        totalBRL += b.balanceDecimal * 5.0;
+        totalBRL += market.usdToBRL(b.balanceDecimal);
       }
     }
 
@@ -107,7 +109,7 @@ class _PortfolioHeader extends StatelessWidget {
       const SizedBox(height: 10),
       const Text('Saldo total estimado', style: TextStyle(fontSize: 12, color: kTxtSub)),
       const SizedBox(height: 4),
-      Text('R\$ ${_fmt(totalBRL)}',
+      Text(Fmt.brl(totalBRL),
           style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: kTxt,
               fontFeatures: [FontFeature.tabularFigures()])),
       const SizedBox(height: 14),
@@ -115,15 +117,15 @@ class _PortfolioHeader extends StatelessWidget {
       Wrap(spacing: 12, runSpacing: 6, children: balances.take(4).map((b) {
         final coin = market.coins.where((c) => c.symbol == b.asset).firstOrNull;
         final brl = coin != null ? b.balanceDecimal * coin.priceBRL
-            : b.asset == 'USDT-sim' ? b.balanceDecimal * 5.0 : 0.0;
+            : b.asset == 'USDT-sim' ? market.usdToBRL(b.balanceDecimal) : 0.0;
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(color: Colors.white.withOpacity(0.06),
               borderRadius: BorderRadius.circular(20)),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Text(b.asset, style: const TextStyle(fontSize: 11, color: kTxt, fontWeight: FontWeight.w700)),
+            Text(Fmt.asset(b.asset), style: const TextStyle(fontSize: 11, color: kTxt, fontWeight: FontWeight.w700)),
             const SizedBox(width: 6),
-            Text('R\$ ${_fmt(brl)}',
+            Text(Fmt.brl(brl),
                 style: const TextStyle(fontSize: 11, color: kTxtSub,
                     fontFeatures: [FontFeature.tabularFigures()])),
           ]),
@@ -131,26 +133,15 @@ class _PortfolioHeader extends StatelessWidget {
       }).toList()),
     ]),
   );
-
-  String _fmt(double v) {
-    if (v == 0) return '0,00';
-    if (v >= 1000) return v.toStringAsFixed(2).replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => '.');
-    return v.toStringAsFixed(2);
-  }
 }
 
 // ─── Deposit button ───────────────────────────────────────────────────────────
 
 class _DepositButton extends StatelessWidget {
   @override
-  Widget build(BuildContext context) => Container(
-    decoration: BoxDecoration(borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: kBrand.withOpacity(0.25), blurRadius: 12)]),
-    child: FilledButton.icon(
-      onPressed: () => showDialog(
-        context: context,
-        builder: (_) => const DepositDialog(),
-      ),
+  Widget build(BuildContext context) => Row(children: [
+    Expanded(child: FilledButton.icon(
+      onPressed: () => showDialog(context: context, builder: (_) => const DepositDialog()),
       icon: const Icon(Icons.add_rounded, size: 20, color: kBg),
       label: const Text('Depositar', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: kBg)),
       style: FilledButton.styleFrom(
@@ -158,8 +149,19 @@ class _DepositButton extends StatelessWidget {
         minimumSize: const Size(double.infinity, 52),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
-    ),
-  );
+    )),
+    const SizedBox(width: 10),
+    Expanded(child: OutlinedButton.icon(
+      onPressed: () => showDialog(context: context, builder: (_) => const WithdrawDialog()),
+      icon: const Icon(Icons.arrow_upward_rounded, size: 18, color: kTxt),
+      label: const Text('Sacar', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: kTxt)),
+      style: OutlinedButton.styleFrom(
+        minimumSize: const Size(double.infinity, 52),
+        side: const BorderSide(color: kBorder),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    )),
+  ]);
 }
 
 // ─── Empty wallet ─────────────────────────────────────────────────────────────
@@ -234,45 +236,29 @@ class _AssetRow extends StatelessWidget {
 
         // Name + change
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(bal.asset, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: kTxt)),
+          Text(Fmt.asset(bal.asset), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: kTxt)),
           if (coin != null)
             Row(children: [
-              Text('\$${_fmtUSD(coin!.priceUSD)}',
+              Text(Fmt.usd(coin!.priceUSD),
                   style: const TextStyle(fontSize: 11, color: kTxtSub,
                       fontFeatures: [FontFeature.tabularFigures()])),
               const SizedBox(width: 6),
-              Text('${isUp ? '+' : ''}${pctChange.toStringAsFixed(2)}%',
+              Text(Fmt.pct(pctChange),
                   style: TextStyle(fontSize: 10, color: isUp ? kBuy : kSell, fontWeight: FontWeight.w600)),
             ]),
         ])),
 
         // Balance + BRL
         Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-          Text(_fmtAmt(bal.balanceDecimal, bal.asset),
+          Text(Fmt.qty(bal.balanceDecimal),
               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: kTxt,
                   fontFeatures: [FontFeature.tabularFigures()])),
-          Text('R\$ ${_fmtBRL(brl)}',
+          Text(Fmt.brl(brl),
               style: const TextStyle(fontSize: 11, color: kTxtSub,
                   fontFeatures: [FontFeature.tabularFigures()])),
         ]),
       ]),
     );
-  }
-
-  String _fmtAmt(double v, String asset) {
-    if (v == 0) return '0';
-    if (v >= 1) return v.toStringAsFixed(4).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
-    return v.toStringAsExponential(4);
-  }
-  String _fmtBRL(double v) {
-    if (v >= 1000) return v.toStringAsFixed(2).replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => '.');
-    return v.toStringAsFixed(2);
-  }
-  String _fmtUSD(double v) {
-    if (v >= 1000) return '${(v/1000).toStringAsFixed(1)}K';
-    if (v >= 1) return v.toStringAsFixed(2);
-    if (v >= 0.001) return v.toStringAsFixed(5);
-    return v.toStringAsExponential(3);
   }
 }
 
@@ -319,8 +305,8 @@ class _OpenOrdersCard extends StatelessWidget {
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('${o.side == 'buy' ? 'COMPRA' : 'VENDA'} ${o.type.toUpperCase()} · ${o.pair}',
                   style: TextStyle(fontSize: 12, color: c, fontWeight: FontWeight.w800)),
-              Text(o.type == 'market' ? '${(o.quantity/1e8).toStringAsFixed(6)}'
-                  : '${(o.quantity/1e8).toStringAsFixed(6)} @ ${(o.price/1e8).toStringAsFixed(2)}',
+              Text(o.type == 'market' ? Fmt.qty(o.quantity / 1e8)
+                  : '${Fmt.qty(o.quantity / 1e8)} @ ${Fmt.price(o.price / 1e8)}',
                   style: const TextStyle(fontSize: 11, color: kTxtSub)),
             ])),
             _Pill(o.status),
@@ -353,7 +339,7 @@ class _Pill extends StatelessWidget {
 class _TradesCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    final trades = context.watch<TradingState>().trades.take(8).toList();
+    final trades = context.watch<TradingState>().allTrades.take(8).toList();
     if (trades.isEmpty) return _Empty(Icons.swap_horiz_outlined, 'Nenhuma movimentação ainda');
     return Container(
       decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(12), border: Border.all(color: kBorder)),
@@ -369,14 +355,13 @@ class _TradesCard extends StatelessWidget {
         ...trades.map((t) {
           final up = t.takerSide == 'buy'; final c = up ? kBuy : kSell;
           final ts = DateTime.fromMillisecondsSinceEpoch(t.timestampMs);
-          final priceStr = t.price > 1e10 ? (t.price/1e8).toStringAsFixed(2) : (t.price/1e8).toStringAsFixed(6);
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
             child: Row(children: [
               Expanded(child: Text(t.pair, style: const TextStyle(fontSize: 11, color: kTxt))),
-              Expanded(child: Text(priceStr, textAlign: TextAlign.right,
+              Expanded(child: Text(Fmt.price(t.price / 1e8), textAlign: TextAlign.right,
                   style: TextStyle(fontSize: 11, color: c, fontFeatures: const [FontFeature.tabularFigures()]))),
-              Expanded(child: Text((t.quantity/1e8).toStringAsFixed(6), textAlign: TextAlign.right,
+              Expanded(child: Text(Fmt.qty(t.quantity / 1e8), textAlign: TextAlign.right,
                   style: const TextStyle(fontSize: 11, color: kTxt, fontFeatures: [FontFeature.tabularFigures()]))),
               Expanded(child: Text(
                   '${ts.hour.toString().padLeft(2,'0')}:${ts.minute.toString().padLeft(2,'0')}',

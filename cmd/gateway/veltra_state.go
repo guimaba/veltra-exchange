@@ -106,9 +106,17 @@ type VeltraState struct {
 
 	// market data (populado pelo cmd/marketdata via market.update)
 	marketCoins     []MarketCoin
-	marketCandles   map[string][]Candle // symbol -> candles
+	marketCandles   map[string][]Candle // symbol -> candles (referência CoinGecko)
 	marketUpdatedAt int64
+
+	// candles REAIS agregados dos trades executados (OHLCV por símbolo base).
+	// Têm prioridade sobre os de referência quando existem.
+	tradeCandles map[string][]Candle
 }
+
+// tradeCandleInterval: bucket de 1 minuto (em ms) para as velas reais.
+const tradeCandleIntervalMs = 60 * 1000
+const maxTradeCandles = 200
 
 func NewVeltraState() *VeltraState {
 	return &VeltraState{
@@ -118,6 +126,7 @@ func NewVeltraState() *VeltraState {
 		balances:      map[string]map[string]int64{},
 		lastPx:        map[string]int64{},
 		marketCandles: map[string][]Candle{},
+		tradeCandles:  map[string][]Candle{},
 	}
 }
 
@@ -214,15 +223,50 @@ func (s *VeltraState) MarketSnapshot() ([]byte, error) {
 	})
 }
 
-// CandlesForSymbol retorna as velas de um símbolo.
+// CandlesForSymbol retorna as velas de um símbolo. Prioriza as velas REAIS
+// (agregadas dos trades executados); se o símbolo ainda não negociou, cai nas
+// velas de referência (CoinGecko) para o gráfico não ficar vazio.
 func (s *VeltraState) CandlesForSymbol(symbol string) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if real, ok := s.tradeCandles[symbol]; ok && len(real) > 0 {
+		return json.Marshal(real)
+	}
 	candles, ok := s.marketCandles[symbol]
 	if !ok {
 		return json.Marshal([]Candle{})
 	}
 	return json.Marshal(candles)
+}
+
+// applyTradeCandle agrega um trade na vela OHLCV de 1 min do símbolo base.
+// Deve ser chamado com s.mu travado (vem de applyTrade).
+func (s *VeltraState) applyTradeCandle(symbol string, priceScaled, qtyScaled, tsMs int64) {
+	if symbol == "" || tsMs == 0 {
+		return
+	}
+	price := float64(priceScaled) / 1e8
+	vol := float64(qtyScaled) / 1e8
+	bucket := (tsMs / tradeCandleIntervalMs) * (tradeCandleIntervalMs / 1000) // segundos alinhados
+	list := s.tradeCandles[symbol]
+	if len(list) > 0 && list[len(list)-1].T == bucket {
+		c := list[len(list)-1]
+		if price > c.H {
+			c.H = price
+		}
+		if price < c.L {
+			c.L = price
+		}
+		c.C = price
+		c.V += vol
+		list[len(list)-1] = c
+	} else {
+		list = append(list, Candle{T: bucket, O: price, H: price, L: price, C: price, V: vol})
+		if len(list) > maxTradeCandles {
+			list = list[len(list)-maxTradeCandles:]
+		}
+	}
+	s.tradeCandles[symbol] = list
 }
 
 // applyTrade atualiza fita, ultimo preco e a projecao de saldos das duas pontas.
@@ -249,6 +293,9 @@ func (s *VeltraState) applyTrade(p messaging.TradeExecutedPayload) {
 	if base == "" {
 		return
 	}
+
+	// Agrega a vela OHLCV real do símbolo base.
+	s.applyTradeCandle(base, p.Price, p.Quantity, p.TimestampMs)
 	notional, err := money.Notional(money.Amount(p.Price), money.Amount(p.Quantity))
 	if err != nil {
 		return

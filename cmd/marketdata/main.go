@@ -111,6 +111,16 @@ var coinDefs = []coinDef{
 	{"tron", "TRX", "TRON"},
 }
 
+// fiatCoins: moedas fiat expostas como ativos negociáveis (par X/USDT-sim, para
+// converter fiat ↔ USDT no trading). PriceUSD = valor em USDT (USD=1; demais =
+// 1/taxa, espelhando os fiatRates do gateway).
+var fiatCoins = []MarketCoin{
+	{Symbol: "USD", Name: "Dólar Americano", PriceUSD: 1.0, PriceBRL: 5.20},
+	{Symbol: "BRL", Name: "Real Brasileiro", PriceUSD: 1.0 / 5.20, PriceBRL: 1.0},
+	{Symbol: "EUR", Name: "Euro", PriceUSD: 1.0 / 0.92, PriceBRL: 5.20 / 0.92},
+	{Symbol: "GBP", Name: "Libra Esterlina", PriceUSD: 1.0 / 0.79, PriceBRL: 5.20 / 0.79},
+}
+
 // cosmosGeckoID é a referência oculta para derivar o preço VLT.
 const cosmosGeckoID = "cosmos"
 
@@ -448,6 +458,12 @@ func (svc *service) tick(ctx context.Context, isFirst bool) error {
 		log.Printf("[MarketData] Aviso: preço de cosmos (VLT ref) não encontrado")
 	}
 
+	// Moedas fiat como ativos negociáveis (pares fiat/USDT-sim para conversão).
+	// Preço em USDT (USD=1; demais = 1/taxa). Permite trocar fiat ↔ USDT no trading.
+	for _, f := range fiatCoins {
+		coins = append(coins, f)
+	}
+
 	// Monta mapa de candles para o payload (últimas publishCandles por moeda).
 	candleMap := make(map[string][]Candle, len(coins))
 	for _, coin := range coins {
@@ -590,6 +606,11 @@ func main() {
 		log.Fatalf("[MarketData] Falha ao conectar ao RabbitMQ: %v", err)
 	}
 	defer client.Close()
+
+	// Declara a topologia (Amazon MQ não importa definitions.json). Idempotente.
+	if err := client.DeclareTopology(); err != nil {
+		log.Printf("[MarketData] Aviso: topologia nao declarada (%v) - ok se ja existir", err)
+	}
 
 	publisher := messaging.NewPublisher(client)
 	defer publisher.Close()

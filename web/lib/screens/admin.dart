@@ -1,9 +1,11 @@
 import 'dart:convert';
 
+import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../api.dart';
+import '../fmt.dart';
 import '../state.dart';
 import '../theme.dart';
 import 'dlq.dart' show openUrl;
@@ -109,13 +111,13 @@ class _OverviewTabState extends State<_OverviewTab> {
         ]),
         const SizedBox(height: 14),
 
-        GridView.count(
+        LayoutBuilder(builder: (ctx, box) => GridView.count(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
-          crossAxisCount: 2,
+          crossAxisCount: box.maxWidth >= 700 ? 4 : 2,
           mainAxisSpacing: 10,
           crossAxisSpacing: 10,
-          childAspectRatio: 2.2,
+          childAspectRatio: box.maxWidth >= 700 ? 1.7 : 2.2,
           children: [
             _KpiCard(Icons.people_outline, 'Usuários', '${s['total_users'] ?? 0}', kBrand),
             _KpiCard(Icons.swap_horiz, 'Trades', '${s['total_trades'] ?? 0}', kBuy),
@@ -124,7 +126,12 @@ class _OverviewTabState extends State<_OverviewTab> {
                 _fmtVol((s['total_volume'] as num?)?.toDouble() ?? 0),
                 const Color(0xFFF0B90B)),
           ],
-        ),
+        )),
+        const SizedBox(height: 14),
+
+        _MetricsBarChart(stats: s),
+        const SizedBox(height: 14),
+        _ActivityDonut(stats: s),
         const SizedBox(height: 14),
 
         _AdminCard(
@@ -151,6 +158,153 @@ class _OverviewTabState extends State<_OverviewTab> {
     if (v >= 1e6) return '${(v / 1e6).toStringAsFixed(2)}M';
     if (v >= 1e3) return '${(v / 1e3).toStringAsFixed(1)}K';
     return v.toStringAsFixed(2);
+  }
+}
+
+// ─── Gráfico de barras das métricas ──────────────────────────────────────────
+
+class _MetricsBarChart extends StatelessWidget {
+  final Map<String, dynamic> stats;
+  const _MetricsBarChart({required this.stats});
+
+  @override
+  Widget build(BuildContext context) {
+    final data = <(String, double, Color)>[
+      ('Usuários', ((stats['total_users'] ?? 0) as num).toDouble(), kBrand),
+      ('Trades', ((stats['total_trades'] ?? 0) as num).toDouble(), kBuy),
+      ('Depósitos', ((stats['total_faucets'] ?? 0) as num).toDouble(), kBrand2),
+      ('WS', ((stats['ws_clients'] ?? 0) as num).toDouble(), const Color(0xFFF0B90B)),
+    ];
+    final maxV = data.map((e) => e.$2).fold<double>(1, (a, b) => b > a ? b : a);
+
+    return _AdminCard(
+      title: 'Métricas da exchange',
+      child: SizedBox(
+        height: 180,
+        child: BarChart(BarChartData(
+          alignment: BarChartAlignment.spaceAround,
+          maxY: maxV * 1.2,
+          gridData: FlGridData(
+            show: true,
+            drawVerticalLine: false,
+            horizontalInterval: (maxV / 4).ceilToDouble().clamp(1, double.infinity),
+            getDrawingHorizontalLine: (_) =>
+                FlLine(color: kBorder.withOpacity(0.5), strokeWidth: 0.5),
+          ),
+          borderData: FlBorderData(show: false),
+          titlesData: FlTitlesData(
+            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            leftTitles: AxisTitles(
+                sideTitles: SideTitles(showTitles: true, reservedSize: 34, getTitlesWidget: (v, m) {
+              if (v == m.max) return const SizedBox.shrink();
+              return Text(Fmt.compact(v),
+                  style: const TextStyle(fontSize: 9, color: kTxtMuted));
+            })),
+            bottomTitles: AxisTitles(
+                sideTitles: SideTitles(showTitles: true, getTitlesWidget: (v, m) {
+              final i = v.toInt();
+              if (i < 0 || i >= data.length) return const SizedBox.shrink();
+              return Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(data[i].$1,
+                      style: const TextStyle(fontSize: 10, color: kTxtSub)));
+            })),
+          ),
+          barGroups: [
+            for (int i = 0; i < data.length; i++)
+              BarChartGroupData(x: i, barRods: [
+                BarChartRodData(
+                  toY: data[i].$2,
+                  color: data[i].$3,
+                  width: 26,
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                )
+              ]),
+          ],
+        )),
+      ),
+    );
+  }
+}
+
+// ─── Donut de composição de atividade ────────────────────────────────────────
+
+class _ActivityDonut extends StatelessWidget {
+  final Map<String, dynamic> stats;
+  const _ActivityDonut({required this.stats});
+
+  @override
+  Widget build(BuildContext context) {
+    final parts = <(String, double, Color)>[
+      ('Trades', ((stats['total_trades'] ?? 0) as num).toDouble(), kBuy),
+      ('Depósitos', ((stats['total_faucets'] ?? 0) as num).toDouble(), kBrand2),
+      ('Usuários', ((stats['total_users'] ?? 0) as num).toDouble(), kBrand),
+    ];
+    final total = parts.fold<double>(0, (a, b) => a + b.$2);
+
+    return _AdminCard(
+      title: 'Composição de atividade',
+      child: total <= 0
+          ? const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Center(
+                  child: Text('Sem atividade ainda',
+                      style: TextStyle(color: kTxtMuted, fontSize: 12))),
+            )
+          : Row(children: [
+              SizedBox(
+                height: 140,
+                width: 140,
+                child: PieChart(PieChartData(
+                  sectionsSpace: 2,
+                  centerSpaceRadius: 38,
+                  sections: [
+                    for (final p in parts)
+                      PieChartSectionData(
+                        value: p.$2,
+                        color: p.$3,
+                        title: total > 0
+                            ? '${(p.$2 / total * 100).toStringAsFixed(0)}%'
+                            : '',
+                        radius: 28,
+                        titleStyle: const TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.black),
+                      ),
+                  ],
+                )),
+              ),
+              const SizedBox(width: 20),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  for (final p in parts)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(children: [
+                        Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                                color: p.$3,
+                                borderRadius: BorderRadius.circular(2))),
+                        const SizedBox(width: 8),
+                        Text('${p.$1}: ',
+                            style: const TextStyle(fontSize: 12, color: kTxtSub)),
+                        Text(Fmt.integer(p.$2),
+                            style: const TextStyle(
+                                fontSize: 12,
+                                color: kTxt,
+                                fontWeight: FontWeight.w700)),
+                      ]),
+                    ),
+                ],
+              ),
+            ]),
+    );
   }
 }
 
@@ -321,7 +475,7 @@ class _UsersTabState extends State<_UsersTab> {
                 itemCount: filtered.length,
                 separatorBuilder: (_, __) =>
                     Container(height: 1, color: kBorder.withOpacity(0.4)),
-                itemBuilder: (_, i) => _UserRow(user: filtered[i]),
+                itemBuilder: (_, i) => _UserRow(user: filtered[i], onChanged: _load),
               ),
       ),
     ]);
@@ -330,7 +484,8 @@ class _UsersTabState extends State<_UsersTab> {
 
 class _UserRow extends StatelessWidget {
   final Map<String, dynamic> user;
-  const _UserRow({required this.user});
+  final VoidCallback onChanged;
+  const _UserRow({required this.user, required this.onChanged});
 
   @override
   Widget build(BuildContext context) {
@@ -351,7 +506,9 @@ class _UserRow extends StatelessWidget {
       } catch (_) {}
     }
 
-    return Container(
+    return InkWell(
+      onTap: () => _showManage(context, username, isAdmin, bals),
+      child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
         // Avatar + name
@@ -427,11 +584,7 @@ class _UserRow extends StatelessWidget {
                   children: bals.take(3).map((b) {
                     final a = b['asset'] as String? ?? '';
                     final v = (b['balance'] as num?)?.toInt() ?? 0;
-                    final disp = v >= 1e10
-                        ? '${(v / 1e8).toStringAsFixed(2)} $a'
-                        : v >= 1e8
-                            ? '${(v / 1e8).toStringAsFixed(4)} $a'
-                            : '${(v / 1e8).toStringAsExponential(2)} $a';
+                    final disp = '${Fmt.qty(v / 1e8)} ${Fmt.asset(a)}';
                     return Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 7, vertical: 2),
@@ -469,6 +622,101 @@ class _UserRow extends StatelessWidget {
           ),
         ),
       ]),
+    ));
+  }
+
+  // Painel de gestão do usuário: saldos completos + ajustar saldo + promover.
+  void _showManage(BuildContext context, String username, bool isAdmin,
+      List<Map<String, dynamic>> bals) {
+    final amtCtrl = TextEditingController(text: '1000');
+    String asset = 'USDT-sim';
+    final assetOptions = <String>{
+      'USDT-sim', 'VLT', 'BTC', 'ETH', 'BNB', 'SOL',
+      ...bals.map((b) => b['asset'] as String? ?? '').where((a) => a.isNotEmpty),
+    }.toList();
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, ss) {
+        bool busy = false;
+        return AlertDialog(
+          backgroundColor: kSurface2,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14), side: const BorderSide(color: kBorder)),
+          title: Row(children: [
+            Text('@$username', style: const TextStyle(color: kTxt, fontSize: 16, fontWeight: FontWeight.w800)),
+            const SizedBox(width: 8),
+            if (isAdmin)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(color: kBrand.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
+                child: const Text('Admin', style: TextStyle(fontSize: 9, color: kBrand, fontWeight: FontWeight.w800)),
+              ),
+          ]),
+          content: SizedBox(width: 380, child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('SALDOS', style: TextStyle(fontSize: 10, color: kTxtMuted, letterSpacing: 1.5, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            if (bals.isEmpty)
+              const Text('Sem saldo', style: TextStyle(fontSize: 12, color: kTxtSub))
+            else
+              Wrap(spacing: 6, runSpacing: 6, children: bals.map((b) {
+                final a = b['asset'] as String? ?? '';
+                final v = (b['balance'] as num?)?.toInt() ?? 0;
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(color: kBorder.withOpacity(0.4), borderRadius: BorderRadius.circular(6)),
+                  child: Text('${Fmt.qty(v / 1e8)} ${Fmt.asset(a)}',
+                      style: const TextStyle(fontSize: 11, color: kTxt, fontFeatures: [FontFeature.tabularFigures()])),
+                );
+              }).toList()),
+            const Divider(height: 24, color: kBorder),
+            const Text('AJUSTAR SALDO', style: TextStyle(fontSize: 10, color: kTxtMuted, letterSpacing: 1.5, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 6),
+            Row(children: [
+              Expanded(child: DropdownButtonFormField<String>(
+                value: asset, dropdownColor: kSurface2, style: const TextStyle(color: kTxt, fontSize: 13),
+                decoration: const InputDecoration(labelText: 'Ativo', isDense: true),
+                items: assetOptions.map((a) => DropdownMenuItem(value: a, child: Text(Fmt.asset(a)))).toList(),
+                onChanged: (v) => ss(() => asset = v ?? asset),
+              )),
+              const SizedBox(width: 8),
+              Expanded(child: TextField(
+                controller: amtCtrl, style: const TextStyle(color: kTxt, fontSize: 13),
+                decoration: const InputDecoration(labelText: 'Qtd (- debita)', isDense: true),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+              )),
+            ]),
+            const SizedBox(height: 6),
+            const Text('Use valor negativo para debitar.', style: TextStyle(fontSize: 10, color: kTxtMuted)),
+          ])),
+          actions: [
+            TextButton(
+              onPressed: busy ? null : () async {
+                ss(() => busy = true);
+                try {
+                  await ctx.read<ApiClient>().adminPromote(username: username, isAdmin: !isAdmin);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  onChanged();
+                } catch (_) { ss(() => busy = false); }
+              },
+              child: Text(isAdmin ? 'Rebaixar' : 'Promover a admin',
+                  style: const TextStyle(color: kBrand)),
+            ),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Fechar', style: TextStyle(color: kTxtSub))),
+            FilledButton(
+              onPressed: busy ? null : () async {
+                ss(() => busy = true);
+                try {
+                  await ctx.read<ApiClient>().adminCredit(
+                      username: username, asset: asset, amount: amtCtrl.text.trim());
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  onChanged();
+                } catch (_) { ss(() => busy = false); }
+              },
+              child: const Text('Aplicar'),
+            ),
+          ],
+        );
+      }),
     );
   }
 

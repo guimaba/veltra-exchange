@@ -28,6 +28,8 @@ resource "aws_mq_broker" "this" {
   host_instance_type  = var.instance_type
   deployment_mode     = "SINGLE_INSTANCE"
   publicly_accessible = false
+  # RabbitMQ 3.13+ exige upgrades de minor automáticos habilitados.
+  auto_minor_version_upgrade = true
 
   subnet_ids      = [var.private_subnet_ids[0]] # SINGLE_INSTANCE usa 1 subnet
   security_groups = [var.data_sg_id]
@@ -51,10 +53,12 @@ resource "aws_secretsmanager_secret" "amqp" {
 resource "aws_secretsmanager_secret_version" "amqp" {
   secret_id = aws_secretsmanager_secret.amqp.id
   # Ex.: amqps://user:pass@b-xxxx.mq.region.amazonaws.com:5671
+  # O endpoint do RabbitMQ vem como "amqps://b-xxxx.mq.region.on.aws:5671";
+  # removemos o esquema para injetar usuário:senha e remontar a URL.
   secret_string = format(
     "amqps://%s:%s@%s",
     var.username,
     random_password.mq.result,
-    replace(tolist(aws_mq_broker.this.instances[0].endpoints)[0], "amqp+ssl://", ""),
+    replace(tolist(aws_mq_broker.this.instances[0].endpoints)[0], "amqps://", ""),
   )
 }

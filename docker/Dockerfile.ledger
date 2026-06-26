@@ -24,5 +24,7 @@ USER app
 
 WORKDIR /app
 COPY --from=builder /out/ledger /app/ledger
+# Schema SQL para migração no startup (RDS não roda os initdb scripts do Compose).
+COPY docker/postgres/*.sql /schema/
 
 ENTRYPOINT ["/app/ledger"]

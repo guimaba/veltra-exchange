@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../api.dart';
 import '../balance_state.dart';
+import '../fmt.dart';
 import '../theme.dart';
 
 const _methods = [
@@ -29,8 +30,15 @@ class DepositDialog extends StatefulWidget {
 class _DepositDialogState extends State<DepositDialog> {
   final _amountCtrl = TextEditingController(text: '1000');
   String _selectedMethod = 'pix';
+  String _currency = 'BRL';
   int _step = 0; // 0=form 1=processing 2=success
   String? _error;
+
+  FiatCurrency get _fiat => fiatByCode(_currency);
+
+  /// Valor digitado (o depósito credita a própria moeda 1:1 como ativo).
+  double get _amountValue =>
+      double.tryParse(_amountCtrl.text.replaceAll(',', '.')) ?? 0;
 
   @override
   void dispose() { _amountCtrl.dispose(); super.dispose(); }
@@ -48,7 +56,8 @@ class _DepositDialogState extends State<DepositDialog> {
     try {
       await context.read<ApiClient>().deposit(
           amount: _amountCtrl.text.trim().replaceAll(',', '.'),
-          method: _selectedMethod);
+          method: _selectedMethod,
+          currency: _currency);
       context.read<BalanceState>().refresh();
       if (mounted) setState(() => _step = 2);
     } on ApiException catch (e) {
@@ -98,7 +107,7 @@ class _DepositDialogState extends State<DepositDialog> {
         const SizedBox(width: 12),
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           const Text('Depositar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: kTxt)),
-          const Text('Saldo creditado como USDT-sim', style: TextStyle(fontSize: 11, color: kTxtSub)),
+          const Text('Saldo creditado em USDT', style: TextStyle(fontSize: 11, color: kTxtSub)),
         ]),
         const Spacer(),
         IconButton(
@@ -107,16 +116,49 @@ class _DepositDialogState extends State<DepositDialog> {
         ),
       ]),
 
-      const SizedBox(height: 24),
+      const SizedBox(height: 20),
+
+      // Currency selector
+      const Text('MOEDA',
+          style: TextStyle(fontSize: 10, color: kTxtMuted, letterSpacing: 2, fontWeight: FontWeight.w700)),
+      const SizedBox(height: 8),
+      Row(children: [
+        for (final c in kFiatCurrencies)
+          Expanded(child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 3),
+            child: GestureDetector(
+              onTap: () => setState(() => _currency = c.code),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: _currency == c.code ? kBuy.withOpacity(0.15) : kSurface2,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: _currency == c.code ? kBuy : kBorder,
+                      width: _currency == c.code ? 1.5 : 1),
+                ),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Text(c.symbol, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800,
+                      color: _currency == c.code ? kBuy : kTxt)),
+                  Text(c.code, style: TextStyle(fontSize: 9,
+                      color: _currency == c.code ? kBuy : kTxtSub)),
+                ]),
+              ),
+            ),
+          )),
+      ]),
+
+      const SizedBox(height: 14),
 
       // Amount
       TextField(
         controller: _amountCtrl,
+        onChanged: (_) => setState(() {}),
         style: const TextStyle(color: kTxt, fontSize: 22, fontWeight: FontWeight.w700),
         textAlign: TextAlign.center,
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
         decoration: InputDecoration(
-          prefixText: 'R\$ ',
+          prefixText: '${_fiat.symbol} ',
           prefixStyle: const TextStyle(color: kTxtSub, fontSize: 18),
           hintText: '0,00',
           hintStyle: const TextStyle(color: kTxtMuted),
@@ -146,14 +188,29 @@ class _DepositDialogState extends State<DepositDialog> {
                   color: kBorder.withOpacity(0.3),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Text('R\$ $v', textAlign: TextAlign.center,
+                child: Text('${_fiat.symbol} $v', textAlign: TextAlign.center,
                     style: const TextStyle(fontSize: 11, color: kTxtSub)),
               ),
             ),
           )),
       ]),
 
-      const SizedBox(height: 20),
+      const SizedBox(height: 12),
+
+      // Converted preview
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(color: kSurface2, borderRadius: BorderRadius.circular(8)),
+        child: Row(children: [
+          const Text('Você recebe', style: TextStyle(fontSize: 11, color: kTxtSub)),
+          const Spacer(),
+          Text('${_fiat.symbol} ${Fmt.money(_amountValue)} ($_currency)',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: kBuy,
+                  fontFeatures: [FontFeature.tabularFigures()])),
+        ]),
+      ),
+
+      const SizedBox(height: 18),
 
       // Payment method
       const Text('FORMA DE PAGAMENTO',
@@ -161,6 +218,8 @@ class _DepositDialogState extends State<DepositDialog> {
       const SizedBox(height: 10),
       Row(children: _methods.map((m) {
         final sel = m.id == _selectedMethod;
+        // Selecionado fica sempre VERDE (kBuy), para qualquer forma de pagamento.
+        final selColor = kBuy;
         return Expanded(child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4),
           child: GestureDetector(
@@ -169,14 +228,14 @@ class _DepositDialogState extends State<DepositDialog> {
               duration: const Duration(milliseconds: 150),
               padding: const EdgeInsets.symmetric(vertical: 10),
               decoration: BoxDecoration(
-                color: sel ? m.color.withOpacity(0.12) : kSurface2,
+                color: sel ? selColor.withOpacity(0.15) : kSurface2,
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: sel ? m.color.withOpacity(0.6) : kBorder),
+                border: Border.all(color: sel ? selColor : kBorder, width: sel ? 1.5 : 1),
               ),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
-                Icon(m.icon, size: 20, color: sel ? m.color : kTxtSub),
+                Icon(m.icon, size: 20, color: sel ? selColor : kTxtSub),
                 const SizedBox(height: 4),
-                Text(m.label, style: TextStyle(fontSize: 10, color: sel ? m.color : kTxtSub,
+                Text(m.label, style: TextStyle(fontSize: 10, color: sel ? selColor : kTxtSub,
                     fontWeight: sel ? FontWeight.w700 : FontWeight.normal)),
               ]),
             ),
@@ -204,7 +263,7 @@ class _DepositDialogState extends State<DepositDialog> {
         child: const Row(children: [
           Icon(Icons.info_outline, size: 14, color: kBrand),
           SizedBox(width: 8),
-          Expanded(child: Text('Simulação — nenhum valor real é cobrado. Saldo creditado como USDT-sim.',
+          Expanded(child: Text('Simulação — nenhum valor real é cobrado. Saldo creditado em USDT (demo).',
               style: TextStyle(fontSize: 11, color: kTxtSub))),
         ]),
       ),
@@ -259,7 +318,7 @@ class _DepositDialogState extends State<DepositDialog> {
       const Text('Depósito confirmado!', textAlign: TextAlign.center,
           style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: kTxt)),
       const SizedBox(height: 8),
-      Text('R\$ ${_amountCtrl.text} creditados como USDT-sim.',
+      Text('${_fiat.symbol} ${Fmt.money(_amountValue)} creditados em $_currency.',
           textAlign: TextAlign.center,
           style: const TextStyle(fontSize: 14, color: kTxtSub)),
       const SizedBox(height: 8),

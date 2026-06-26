@@ -19,7 +19,7 @@
     { "user": "audit",     "vhost": "/blockchain", "configure": "^$", "write": "^blockchain\\.(retry|dlx)$", "read": "^q\\.(audit\\.events|exchange\\.audit)$" },
     { "user": "matching",  "vhost": "/blockchain", "configure": "^$", "write": "^(veltra\\.events|blockchain\\.(retry|dlx))$", "read": "^q\\.matching\\.commands$" },
     { "user": "ledger",    "vhost": "/blockchain", "configure": "^$", "write": "^(veltra\\.events|blockchain\\.(retry|dlx))$", "read": "^q\\.ledger\\.events$" },
-    { "user": "marketdata","vhost": "/blockchain", "configure": "^$", "write": "^(veltra\\.events|blockchain\\.(retry|dlx))$", "read": "^q\\.marketdata\\.events$" }
+    { "user": "marketdata","vhost": "/blockchain", "configure": "^$", "write": "^(veltra\\.(events|commands)|blockchain\\.(retry|dlx))$", "read": "^q\\.marketdata\\.events$" }
   ],
   "policies": [],
   "exchanges": [

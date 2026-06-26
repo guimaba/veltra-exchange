@@ -1,10 +1,10 @@
-import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../market_state.dart';
 import '../theme.dart';
+import '../widgets/candle_chart.dart';
 
 final _fmtBRL  = NumberFormat.currency(locale: 'pt_BR', symbol: 'R\$');
 final _fmtUSD  = NumberFormat.currency(locale: 'en_US', symbol: '\$');
@@ -195,67 +195,11 @@ class _ChartContainer extends StatelessWidget {
               ? _Shimmer()
               : candles.isEmpty
                   ? const Center(child: Text('Sem dados', style: TextStyle(color: kTxtSub)))
-                  : _LineChart(candles: candles, isUp: isUp),
+                  : CandleChart(candles: candles),
         ),
       ),
     ]),
   );
-}
-
-class _LineChart extends StatelessWidget {
-  final List<Candle> candles;
-  final bool isUp;
-  const _LineChart({required this.candles, required this.isUp});
-
-  @override
-  Widget build(BuildContext context) {
-    final c     = isUp ? kBuy : kSell;
-    final spots = candles.asMap().entries.map((e) => FlSpot(e.key.toDouble(), e.value.c)).toList();
-    final minY  = spots.map((s) => s.y).reduce((a, b) => a < b ? a : b);
-    final maxY  = spots.map((s) => s.y).reduce((a, b) => a > b ? a : b);
-    final pad   = (maxY - minY) * 0.12 + 1e-8;
-
-    return LineChart(LineChartData(
-      minX: 0, maxX: (candles.length - 1).toDouble(),
-      minY: minY - pad, maxY: maxY + pad,
-      gridData: FlGridData(show: true, drawVerticalLine: false,
-          getDrawingHorizontalLine: (_) => FlLine(color: kBorder.withOpacity(0.6), strokeWidth: 0.5)),
-      borderData: FlBorderData(show: false),
-      titlesData: FlTitlesData(
-        leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        bottomTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 64,
-          getTitlesWidget: (v, m) {
-            if (v == m.min || v == m.max) return const SizedBox.shrink();
-            return Padding(padding: const EdgeInsets.only(left: 4),
-                child: Text(_fy(v), style: const TextStyle(fontSize: 9, color: kTxtMuted)));
-          },
-        )),
-      ),
-      lineTouchData: LineTouchData(touchTooltipData: LineTouchTooltipData(
-        getTooltipItems: (s) => s.map((x) => LineTooltipItem(
-          _fmtUSD.format(x.y),
-          TextStyle(color: c, fontWeight: FontWeight.w700, fontSize: 11),
-        )).toList(),
-      )),
-      lineBarsData: [LineChartBarData(
-        spots: spots, isCurved: true, curveSmoothness: 0.25,
-        color: c, barWidth: 2,
-        dotData: const FlDotData(show: false),
-        belowBarData: BarAreaData(show: true,
-          gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
-              colors: [c.withOpacity(0.2), c.withOpacity(0.0)])),
-      )],
-    ));
-  }
-
-  String _fy(double v) {
-    if (v >= 1e6) return '\$${(v/1e6).toStringAsFixed(1)}M';
-    if (v >= 1e3) return '\$${(v/1e3).toStringAsFixed(1)}K';
-    if (v >= 1)   return '\$${v.toStringAsFixed(2)}';
-    return '\$${v.toStringAsFixed(6)}';
-  }
 }
 
 class _Shimmer extends StatefulWidget {
@@ -296,23 +240,26 @@ class _StatsGrid extends StatelessWidget {
       ('Variação 24h', '${coin.isUp ? '+' : ''}${coin.change24h.toStringAsFixed(2)}%', c),
       ('Volume 24h', _fmtVol.format(coin.volume24hUSD), null),
       ('Market Cap', _fmtMcap.format(coin.marketCapUSD), null),
-      ('Símbolo', coin.symbol, kBrand),
     ];
-    return GridView.count(
-      shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
-      crossAxisCount: 2, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 2.6,
-      children: items.map((i) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: kBorder)),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
-          Text(i.$1, style: const TextStyle(fontSize: 10, color: kTxtMuted)),
-          const SizedBox(height: 4),
-          Text(i.$2, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: i.$3,
-              fontFeatures: const [FontFeature.tabularFigures()]), overflow: TextOverflow.ellipsis),
-        ]),
-      )).toList(),
-    );
+    return LayoutBuilder(builder: (ctx, box) {
+      final cols = box.maxWidth >= 560 ? 3 : 2;
+      return GridView.count(
+        shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+        crossAxisCount: cols, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 2.9,
+        children: items.map((i) => Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(color: kSurface, borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: kBorder)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
+            Text(i.$1, style: const TextStyle(fontSize: 10, color: kTxtMuted)),
+            const SizedBox(height: 2),
+            FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft,
+              child: Text(i.$2, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: i.$3,
+                  fontFeatures: const [FontFeature.tabularFigures()]))),
+          ]),
+        )).toList(),
+      );
+    });
   }
 }
 

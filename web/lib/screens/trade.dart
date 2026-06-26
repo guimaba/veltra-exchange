@@ -1,13 +1,13 @@
-import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../auth_state.dart';
 import '../balance_state.dart';
+import '../fmt.dart';
 import '../market_state.dart';
 import '../theme.dart';
 import '../trading_state.dart';
+import '../widgets/candle_chart.dart';
 import 'deposit.dart';
 
 const kBuyColor  = kBuy;
@@ -37,6 +37,8 @@ class _TradeScreenState extends State<TradeScreen> {
 
   Future<void> _selectPair(String symbol) async {
     setState(() { _selectedSymbol = symbol; _candles = []; _candlesLoading = true; });
+    // Troca o par ativo no estado de trading → book/fita/ordens reais do par.
+    context.read<TradingState>().setPair('$symbol/USDT-sim');
     final market = context.read<MarketState>();
     final c = await market.loadCandles(symbol);
     if (mounted) setState(() { _candles = c; _candlesLoading = false; });
@@ -342,13 +344,13 @@ class _TopBar extends StatelessWidget {
     final trading = context.watch<TradingState>();
     final coin = market.coins.where((c) => c.symbol == symbol).firstOrNull;
 
-    final priceUSD  = isVLT && trading.lastPrice > 0
-        ? trading.lastPrice / 1e8
-        : (coin?.priceUSD ?? 0);
-    final priceBRL  = coin?.priceBRL ?? priceUSD * 5.0;
+    // Preço do motor (último trade real) quando disponível; senão, referência de mercado.
+    final hasLive   = trading.lastPrice > 0;
+    final priceUSD  = hasLive ? trading.lastPrice / 1e8 : (coin?.priceUSD ?? 0);
+    final priceBRL  = coin?.priceBRL ?? market.usdToBRL(priceUSD);
     final change24h = coin?.change24h ?? 0.0;
     final isUp      = change24h >= 0;
-    final dirColor  = isVLT
+    final dirColor  = hasLive
         ? (trading.priceDirection > 0 ? kBuy : trading.priceDirection < 0 ? kSell : kTxtSub)
         : (isUp ? kBuy : kSell);
 
@@ -361,19 +363,17 @@ class _TopBar extends StatelessWidget {
         Row(mainAxisSize: MainAxisSize.min, children: [
           _CoinDot(symbol),
           const SizedBox(width: 8),
-          Text('$symbol/USDT-sim',
+          Text('$symbol/USDT',
               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: kTxt)),
-          if (isVLT) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(color: kBrand.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(color: kBrand.withOpacity(0.3))),
-              child: const Text('LIVE', style: TextStyle(fontSize: 9, color: kBrand,
-                  fontWeight: FontWeight.w900, letterSpacing: 1)),
-            ),
-          ],
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(color: kBrand.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: kBrand.withOpacity(0.3))),
+            child: const Text('AO VIVO', style: TextStyle(fontSize: 9, color: kBrand,
+                fontWeight: FontWeight.w900, letterSpacing: 1)),
+          ),
         ]),
         const SizedBox(width: 20),
 
@@ -388,22 +388,14 @@ class _TopBar extends StatelessWidget {
         ]),
         const SizedBox(width: 24),
 
-        // Stats — VLT mostra bid/ask do motor; demais mostram 24h + volume
-        if (isVLT) ...[
-          _Stat('Bid', trading.bestBid != null ? fmtAmount(trading.bestBid!) : '—', kBuy),
-          const SizedBox(width: 16),
-          _Stat('Ask', trading.bestAsk != null ? fmtAmount(trading.bestAsk!) : '—', kSell),
-          const SizedBox(width: 16),
-          _Stat('Spread', trading.spread != null ? fmtAmount(trading.spread!) : '—', kTxtSub),
-        ] else ...[
-          _Stat('24h', '${isUp ? '+' : ''}${change24h.toStringAsFixed(2)}%', isUp ? kBuy : kSell),
-          if (coin != null) ...[
-            const SizedBox(width: 16),
-            _Stat('Vol', _fmtVolume(coin.volume24hUSD), kTxtSub),
-            const SizedBox(width: 16),
-            _Stat('MCap', _fmtVolume(coin.marketCapUSD), kTxtMuted),
-          ],
-        ],
+        // Stats — bid/ask/spread do book REAL (motor) para TODOS os pares + 24h.
+        _Stat('Bid', trading.bestBid != null ? fmtAmount(trading.bestBid!) : '—', kBuy),
+        const SizedBox(width: 16),
+        _Stat('Ask', trading.bestAsk != null ? fmtAmount(trading.bestAsk!) : '—', kSell),
+        const SizedBox(width: 16),
+        _Stat('Spread', trading.spread != null ? fmtAmount(trading.spread!) : '—', kTxtSub),
+        const SizedBox(width: 16),
+        _Stat('24h', '${isUp ? '+' : ''}${change24h.toStringAsFixed(2)}%', isUp ? kBuy : kSell),
         const Spacer(),
 
         // Saldo USDT-sim + botão depositar
@@ -569,62 +561,7 @@ class _PriceChartState extends State<_PriceChart> {
   );
 
   Widget _buildChart(List<Candle> candles, Color c) {
-    final spots  = candles.asMap().entries.map((e) => FlSpot(e.key.toDouble(), e.value.c)).toList();
-    final minY   = spots.map((s) => s.y).reduce((a, b) => a < b ? a : b);
-    final maxY   = spots.map((s) => s.y).reduce((a, b) => a > b ? a : b);
-    final pad    = (maxY - minY) * 0.1 + 1e-10;
-
-    return LineChart(LineChartData(
-      minX: 0, maxX: (candles.length - 1).toDouble(),
-      minY: minY - pad, maxY: maxY + pad,
-      gridData: FlGridData(
-        show: true,
-        drawVerticalLine: true,
-        horizontalInterval: (maxY - minY) / 4,
-        verticalInterval: (candles.length / 4).ceilToDouble(),
-        getDrawingHorizontalLine: (_) => FlLine(color: kBorder.withOpacity(0.5), strokeWidth: 0.5),
-        getDrawingVerticalLine: (_) => FlLine(color: kBorder.withOpacity(0.3), strokeWidth: 0.5),
-      ),
-      borderData: FlBorderData(show: false),
-      titlesData: FlTitlesData(
-        leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        bottomTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        rightTitles: AxisTitles(sideTitles: SideTitles(
-          showTitles: true, reservedSize: 68,
-          getTitlesWidget: (v, m) {
-            if (v == m.min || v == m.max) return const SizedBox.shrink();
-            return Padding(padding: const EdgeInsets.only(left: 6),
-                child: Text(_fmtY(v), style: const TextStyle(fontSize: 9, color: kTxtMuted)));
-          },
-        )),
-      ),
-      lineTouchData: LineTouchData(
-        touchTooltipData: LineTouchTooltipData(
-          getTooltipColor: (_) => kSurface2,
-          getTooltipItems: (spots) => spots.map((s) => LineTooltipItem(
-            _fmtY(s.y),
-            TextStyle(color: c, fontWeight: FontWeight.w700, fontSize: 12),
-          )).toList(),
-        ),
-      ),
-      lineBarsData: [LineChartBarData(
-        spots: spots, isCurved: true, curveSmoothness: 0.25,
-        color: c, barWidth: 2,
-        dotData: const FlDotData(show: false),
-        belowBarData: BarAreaData(show: true,
-          gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter,
-              colors: [c.withOpacity(0.18), c.withOpacity(0.0)])),
-      )],
-    ));
-  }
-
-  String _fmtY(double v) {
-    if (v >= 1e6) return '\$${(v/1e6).toStringAsFixed(2)}M';
-    if (v >= 1e3) return '\$${(v/1e3).toStringAsFixed(2)}K';
-    if (v >= 1)   return '\$${v.toStringAsFixed(2)}';
-    if (v >= 0.001) return '\$${v.toStringAsFixed(5)}';
-    return '\$${v.toStringAsExponential(2)}';
+    return CandleChart(candles: candles);
   }
 }
 
@@ -639,9 +576,6 @@ class _TradingPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final market = context.watch<MarketState>();
-    final coin = market.coins.where((c) => c.symbol == symbol).firstOrNull;
-
     return Column(children: [
       // Header
       Container(
@@ -653,124 +587,19 @@ class _TradingPanel extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
             decoration: BoxDecoration(color: kBrand.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-            child: Text('$symbol/USDT-sim', style: const TextStyle(fontSize: 9, color: kBrand, fontWeight: FontWeight.w700)),
+            child: Text('$symbol/USDT', style: const TextStyle(fontSize: 9, color: kBrand, fontWeight: FontWeight.w700)),
           ),
         ]),
       ),
       Container(height: 1, color: kBorder),
       Expanded(
         flex: 5,
-        child: isVLT
-            ? _OrderBookView(onPriceTap: (p) => priceCtrl.text = fmtAmount(p, minDecimals: 0))
-            : _SyntheticBookView(symbol: symbol, coin: coin,
-                onPriceTap: (p) => priceCtrl.text = p.toStringAsFixed(p < 1 ? 6 : 2)),
+        child: _OrderBookView(
+            onPriceTap: (p) => priceCtrl.text = fmtAmount(p, minDecimals: 0)),
       ),
       Container(height: 1, color: kBorder),
       Expanded(flex: 7, child: _OrderForm(priceCtrl: priceCtrl, symbol: symbol, isVLT: isVLT)),
     ]);
-  }
-}
-
-// ─── Synthetic book (non-VLT pairs) ──────────────────────────────────────────
-
-class _SyntheticBookView extends StatelessWidget {
-  final String symbol;
-  final MarketCoin? coin;
-  final void Function(double) onPriceTap;
-  const _SyntheticBookView({required this.symbol, required this.coin, required this.onPriceTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final price = coin?.priceUSD ?? 0.0;
-    if (price == 0) {
-      return const Center(child: Text('Aguardando preço…', style: TextStyle(color: kTxtMuted, fontSize: 11)));
-    }
-
-    // Gera 5 níveis de asks (acima do preço) e 5 bids (abaixo)
-    final factors = [0.001, 0.003, 0.006, 0.010, 0.015];
-    final asks = factors.map((f) => (price * (1 + f), _qty(symbol, f, false))).toList();
-    final bids = factors.map((f) => (price * (1 - f), _qty(symbol, f, true))).toList();
-    final maxQ = [...asks, ...bids].map((e) => e.$2).reduce((a, b) => a > b ? a : b);
-
-    return Column(children: [
-      // Header
-      Padding(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          child: Row(children: [
-            Expanded(child: _BH('USDT-sim')),
-            Expanded(child: _BH(symbol, right: true)),
-          ])),
-      const Divider(height: 1),
-      // Asks reversed
-      Expanded(child: ListView(reverse: true,
-        children: asks.map((e) => _SynRow(
-          price: e.$1, qty: e.$2, maxQty: maxQ,
-          color: kSell, onTap: onPriceTap,
-        )).toList(),
-      )),
-      // Mid price
-      Container(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        color: kSurface2,
-        child: Center(
-          child: Text(_fmtP(price),
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: kTxtSub,
-                  fontFeatures: [FontFeature.tabularFigures()])),
-        ),
-      ),
-      // Bids
-      Expanded(child: ListView(
-        children: bids.map((e) => _SynRow(
-          price: e.$1, qty: e.$2, maxQty: maxQ,
-          color: kBuy, onTap: onPriceTap,
-        )).toList(),
-      )),
-    ]);
-  }
-
-  double _qty(String sym, double factor, bool isBid) {
-    int h = 0; for (final c in sym.codeUnits) h = (h * 31 + c) & 0xFFFF;
-    final base = 0.5 + (h % 100) / 100.0;
-    final mult = isBid ? 1.2 : 0.9;
-    return base * mult * (1.0 - factor * 5);
-  }
-
-  String _fmtP(double v) {
-    if (v >= 1000) return '\$${v.toStringAsFixed(2)}';
-    if (v >= 1) return '\$${v.toStringAsFixed(4)}';
-    return '\$${v.toStringAsExponential(4)}';
-  }
-}
-
-class _SynRow extends StatelessWidget {
-  final double price, qty, maxQty;
-  final Color color;
-  final void Function(double) onTap;
-  const _SynRow({required this.price, required this.qty, required this.maxQty, required this.color, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final frac = (qty / maxQty).clamp(0.02, 1.0);
-    final pStr = price >= 1000 ? price.toStringAsFixed(2)
-        : price >= 1 ? price.toStringAsFixed(4)
-        : price.toStringAsExponential(3);
-    return InkWell(
-      onTap: () => onTap(price),
-      child: SizedBox(height: 17, child: Stack(children: [
-        Positioned.fill(child: Align(alignment: Alignment.centerRight,
-            child: FractionallySizedBox(widthFactor: frac,
-                child: Container(color: color.withOpacity(0.08))))),
-        Padding(padding: const EdgeInsets.symmetric(horizontal: 10),
-            child: Row(children: [
-              Expanded(child: Text(pStr,
-                  style: TextStyle(fontSize: 11, color: color,
-                      fontFeatures: const [FontFeature.tabularFigures()]))),
-              Expanded(child: Text(qty.toStringAsFixed(4),
-                  textAlign: TextAlign.right,
-                  style: const TextStyle(fontSize: 11, color: kTxt,
-                      fontFeatures: [FontFeature.tabularFigures()]))),
-            ])),
-      ])),
-    );
   }
 }
 
@@ -900,8 +729,57 @@ class _OrderFormState extends State<_OrderForm> with SingleTickerProviderStateMi
 
   Future<void> _submit() async {
     final t = context.read<TradingState>();
+    final qty = double.tryParse(_qtyCtrl.text.replaceAll(',', '.'));
+    if (qty == null || qty <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Informe a quantidade')));
+      return;
+    }
+    // Preço de referência: limite digitado ou último preço do mercado.
+    final refPrice = _type == 'limit'
+        ? (double.tryParse(widget.priceCtrl.text.replaceAll(',', '.')) ?? 0)
+        : (t.lastPrice / 1e8);
+    final total = refPrice * qty;
+    final base = widget.symbol;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kSurface2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: const BorderSide(color: kBorder)),
+        title: Text('${_isBuy ? 'Comprar' : 'Vender'} $base', style: TextStyle(color: _isBuy ? kBuy : kSell, fontSize: 16, fontWeight: FontWeight.w800)),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          _confirmRow('Par', '$base/USDT'),
+          _confirmRow('Tipo', _type == 'limit' ? 'Limite' : 'A mercado'),
+          _confirmRow('Quantidade', '${Fmt.qty(qty)} $base'),
+          _confirmRow('Preço', _type == 'limit' ? Fmt.price(refPrice) : 'a mercado (~${Fmt.price(refPrice)})'),
+          const Divider(height: 16, color: kBorder),
+          _confirmRow('Total estimado', '${Fmt.money(total)} USDT', bold: true),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar', style: TextStyle(color: kTxtSub))),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: _isBuy ? kBuy : kSell, foregroundColor: _isBuy ? Colors.black : Colors.white),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(_isBuy ? 'Confirmar compra' : 'Confirmar venda', style: const TextStyle(fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await _doSubmit();
+  }
+
+  Widget _confirmRow(String l, String v, {bool bold = false}) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 3),
+    child: Row(children: [
+      Text(l, style: const TextStyle(fontSize: 12, color: kTxtSub)),
+      const Spacer(),
+      Text(v, style: TextStyle(fontSize: 13, color: kTxt, fontWeight: bold ? FontWeight.w800 : FontWeight.w600,
+          fontFeatures: const [FontFeature.tabularFigures()])),
+    ]),
+  );
+
+  Future<void> _doSubmit() async {
+    final t = context.read<TradingState>();
     setState(() => _sending = true);
-    // Para pares não-VLT: o gateway usa o preço de mercado real como fill price
     final ok = await t.placeOrder(
       pair: '${widget.symbol}/USDT-sim',
       side: _side, type: _type,
@@ -1078,7 +956,7 @@ class _FaucetInline extends StatelessWidget {
       child: const Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(Icons.water_drop_outlined, size: 11, color: kBrand),
         SizedBox(width: 4),
-        Text('Faucet', style: TextStyle(fontSize: 10, color: kBrand, fontWeight: FontWeight.w700)),
+        Text('Receber', style: TextStyle(fontSize: 10, color: kBrand, fontWeight: FontWeight.w700)),
       ]),
     ),
   );
@@ -1094,7 +972,7 @@ class _FaucetInline extends StatelessWidget {
       builder: (ctx) => StatefulBuilder(builder: (ctx, ss) => AlertDialog(
         backgroundColor: kSurface2,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: const BorderSide(color: kBorder)),
-        title: const Text('Faucet — emitir saldo', style: TextStyle(color: kTxt, fontSize: 16)),
+        title: const Text('Receber saldo de teste', style: TextStyle(color: kTxt, fontSize: 16)),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
           DropdownButtonFormField<String>(
             value: asset, dropdownColor: kSurface2, style: const TextStyle(color: kTxt),
@@ -1131,9 +1009,8 @@ class _TapePanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.watch<TradingState>();
-    // Filtra trades do par atual
-    final pair = '$symbol/USDT-sim';
-    final trades = t.trades.where((tr) => tr.pair == pair || symbol == 'VLT').toList();
+    // t.trades já é a fita do par selecionado (estado multi-par).
+    final trades = t.trades;
 
     return Container(
       color: kSurface,
@@ -1189,127 +1066,6 @@ class _H extends StatelessWidget {
       style: const TextStyle(fontSize: 9, color: kTxtMuted, fontWeight: FontWeight.w600));
 }
 
-// ─── Read-only panel (non-VLT pairs) ─────────────────────────────────────────
-
-class _ReadOnlyPanel extends StatelessWidget {
-  final String symbol;
-  const _ReadOnlyPanel({required this.symbol});
-
-  @override
-  Widget build(BuildContext context) {
-    final coin = context.watch<MarketState>().coins.where((c) => c.symbol == symbol).firstOrNull;
-
-    return Container(
-      color: kSurface,
-      padding: const EdgeInsets.all(16),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: kBrand.withOpacity(0.05),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: kBrand.withOpacity(0.2)),
-          ),
-          child: Row(children: [
-            const Icon(Icons.info_outline, size: 16, color: kBrand),
-            const SizedBox(width: 8),
-            Expanded(child: Text(
-              '$symbol não possui trading habilitado.\nApenas VLT/USDT-sim tem matching engine.',
-              style: const TextStyle(fontSize: 12, color: kTxtSub, height: 1.4),
-            )),
-          ]),
-        ),
-        const SizedBox(height: 16),
-        if (coin != null) ...[
-          _InfoRow('Preço USD', '\$${_fmt(coin.priceUSD)}'),
-          _InfoRow('Preço BRL', 'R\$ ${_fmtBRL(coin.priceBRL)}'),
-          _InfoRow('Variação 24h', '${coin.isUp ? '+' : ''}${coin.change24h.toStringAsFixed(2)}%',
-              valueColor: coin.isUp ? kBuy : kSell),
-          _InfoRow('Volume 24h', '\$${_fmtVol(coin.volume24hUSD)}'),
-          _InfoRow('Market Cap', '\$${_fmtVol(coin.marketCapUSD)}'),
-        ],
-      ]),
-    );
-  }
-
-  String _fmt(double v) {
-    if (v >= 1000) return '${(v/1000).toStringAsFixed(2)}K';
-    if (v >= 1) return v.toStringAsFixed(4);
-    if (v >= 0.0001) return v.toStringAsFixed(6);
-    return v.toStringAsExponential(3);
-  }
-  String _fmtBRL(double v) {
-    if (v >= 1000) return v.toStringAsFixed(2).replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => '.');
-    if (v >= 1) return v.toStringAsFixed(2);
-    return v.toStringAsFixed(6);
-  }
-  String _fmtVol(double v) {
-    if (v >= 1e12) return '${(v/1e12).toStringAsFixed(2)}T';
-    if (v >= 1e9) return '${(v/1e9).toStringAsFixed(2)}B';
-    if (v >= 1e6) return '${(v/1e6).toStringAsFixed(2)}M';
-    return '${(v/1e3).toStringAsFixed(1)}K';
-  }
-}
-
-class _InfoRow extends StatelessWidget {
-  final String label, value; final Color? valueColor;
-  const _InfoRow(this.label, this.value, {this.valueColor});
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 6),
-    child: Row(children: [
-      Text(label, style: const TextStyle(fontSize: 12, color: kTxtSub)),
-      const Spacer(),
-      Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
-          color: valueColor ?? kTxt, fontFeatures: const [FontFeature.tabularFigures()])),
-    ]),
-  );
-}
-
-// ─── Market info panel (bottom, non-VLT) ──────────────────────────────────────
-
-class _MarketInfoPanel extends StatelessWidget {
-  final String symbol;
-  const _MarketInfoPanel({required this.symbol});
-  @override
-  Widget build(BuildContext context) {
-    final market = context.watch<MarketState>();
-    // Show top movers
-    final coins = market.coins.where((c) => c.symbol != symbol).take(6).toList();
-    return Container(
-      color: kSurface,
-      child: Column(children: [
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          child: Row(children: [
-            Text('Outros mercados', style: TextStyle(fontSize: 11, color: kTxtSub, fontWeight: FontWeight.w600)),
-          ]),
-        ),
-        const Divider(height: 1),
-        Expanded(child: ListView.builder(
-          itemCount: coins.length,
-          itemBuilder: (_, i) {
-            final c = coins[i]; final up = c.change24h >= 0;
-            return Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-              child: Row(children: [
-                Text(c.symbol, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: kTxt)),
-                const Spacer(),
-                Text('\$${c.priceUSD >= 1 ? c.priceUSD.toStringAsFixed(2) : c.priceUSD.toStringAsExponential(3)}',
-                    style: const TextStyle(fontSize: 11, color: kTxtSub,
-                        fontFeatures: [FontFeature.tabularFigures()])),
-                const SizedBox(width: 8),
-                Text('${up ? '+' : ''}${c.change24h.toStringAsFixed(2)}%',
-                    style: TextStyle(fontSize: 11, color: up ? kBuy : kSell, fontWeight: FontWeight.w700)),
-              ]),
-            );
-          },
-        )),
-      ]),
-    );
-  }
-}
-
 // ─── Orders panel ─────────────────────────────────────────────────────────────
 
 class _OrdersPanel extends StatelessWidget {
@@ -1320,11 +1076,9 @@ class _OrdersPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.watch<TradingState>();
     final pair = '$symbol/USDT-sim';
-    // Filtra por par (VLT usa o getter padrão do matching engine)
-    final open    = symbol == 'VLT' ? t.openOrders
-        : t.openOrders.where((o) => o.pair == pair).toList();
-    final history = symbol == 'VLT' ? t.orderHistory
-        : t.orderHistory.where((o) => o.pair == pair).toList();
+    // Filtra pelo par selecionado — todos os pares são reais agora.
+    final open    = t.openOrders.where((o) => o.pair == pair).toList();
+    final history = t.orderHistory.where((o) => o.pair == pair).toList();
 
     return Container(
       color: kSurface,
@@ -1334,7 +1088,7 @@ class _OrdersPanel extends StatelessWidget {
           const Tab(text: 'Histórico'),
         ]),
         Expanded(child: TabBarView(children: [
-          _OTab(orders: open, canCancel: symbol == 'VLT'),
+          _OTab(orders: open, canCancel: true),
           _OTab(orders: history, canCancel: false),
         ])),
       ])),
@@ -1365,7 +1119,7 @@ class _OTab extends StatelessWidget {
               Text('${o.side == 'buy' ? 'COMPRA' : 'VENDA'} ${o.type.toUpperCase()}',
                   style: TextStyle(fontSize: 11, color: c, fontWeight: FontWeight.w800)),
               Text(o.type == 'market'
-                  ? '${(o.quantity/1e8).toStringAsFixed(4)} VLT'
+                  ? '${(o.quantity/1e8).toStringAsFixed(4)} ${o.pair.split('/').first}'
                   : '${(o.quantity/1e8).toStringAsFixed(4)} @ ${(o.price/1e8).toStringAsFixed(2)}',
                   style: const TextStyle(fontSize: 10, color: kTxtSub)),
             ])),
@@ -1412,9 +1166,8 @@ class _BalanceChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final bal = context.watch<BalanceState>();
     final usdt = bal.balanceOf('USDT-sim');
-    final fmtUsdt = usdt >= 1000
-        ? 'R\$ ${(usdt * 5 / 1000).toStringAsFixed(1)}K'
-        : 'R\$ ${(usdt * 5).toStringAsFixed(2)}';
+    final brl = context.watch<MarketState>().usdToBRL(usdt);
+    final fmtUsdt = 'R\$ ${Fmt.money(brl)}';
 
     return GestureDetector(
       onTap: () => showDialog(context: context, builder: (_) => const DepositDialog()),
@@ -1429,7 +1182,7 @@ class _BalanceChip extends StatelessWidget {
           const Icon(Icons.account_balance_wallet_outlined, size: 13, color: kTxtSub),
           const SizedBox(width: 5),
           Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            const Text('USDT-sim', style: TextStyle(fontSize: 9, color: kTxtMuted)),
+            const Text('USDT', style: TextStyle(fontSize: 9, color: kTxtMuted)),
             Text(usdt == 0 ? '—' : fmtUsdt,
                 style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: kTxt,
                     fontFeatures: [FontFeature.tabularFigures()])),
