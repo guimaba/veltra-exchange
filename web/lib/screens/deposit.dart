@@ -8,9 +8,9 @@ import '../theme.dart';
 
 const _methods = [
   _PayMethod('pix',        'PIX',        Icons.qr_code_2,       Color(0xFF32BCAD)),
-  _PayMethod('visa',       'Visa',        Icons.credit_card,     Color(0xFF1A1F71)),
-  _PayMethod('mastercard', 'Mastercard', Icons.credit_card,      Color(0xFFEB001B)),
-  _PayMethod('boleto',     'Boleto',     Icons.receipt_outlined,  kTxtSub),
+  _PayMethod('visa',       'Visa',        Icons.credit_card,     Color(0xFF32BCAD)),
+  _PayMethod('mastercard', 'Mastercard', Icons.credit_card,      Color(0xFF32BCAD)),
+  _PayMethod('boleto',     'Boleto',     Icons.receipt_outlined,  Color(0xFF32BCAD)),
 ];
 
 class _PayMethod {
