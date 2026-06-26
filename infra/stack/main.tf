@@ -140,7 +140,7 @@ module "matching" {
     NODE_PORT      = "9101"
     PEERS          = "" # task única → líder por padrão
     PAIRS          = var.pairs
-    WAL_DIR        = "/data/matching"
+    WAL_DIR        = "/tmp/matching" # imagem roda como nonroot; /tmp é gravável (sem EFS)
     SNAPSHOT_EVERY = "100"
   }
   secrets            = local.amqp_secret

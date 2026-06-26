@@ -48,3 +48,7 @@ Thumbs.db
 
 # ── PDFs e relatórios gerados localmente ─────────────────────────────────────
 *.pdf
+
+# artefato de build local (Flutter web embutido via ko)
+cmd/gateway/kodata/
+web/pubspec.lock

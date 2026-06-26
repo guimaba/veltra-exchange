@@ -140,6 +140,13 @@ resource "aws_security_group" "tasks" {
     protocol    = "tcp"
     self        = true
   }
+  ingress {
+    description = "MariaDB do audit (mesmo SG)"
+    from_port   = 3306
+    to_port     = 3306
+    protocol    = "tcp"
+    self        = true
+  }
   egress {
     from_port   = 0
     to_port     = 0
