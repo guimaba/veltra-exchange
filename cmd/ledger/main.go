@@ -247,7 +247,7 @@ func publishLedgerPosted(ctx context.Context, pub *messaging.Publisher, refID st
 	return pub.Publish(ctx, messaging.ExchangeVeltraEvents, "ledger.posted", env, nil)
 }
 
-// parsePair split "VLT/USDT-sim" → ("VLT", "USDT-sim")
+// parsePair split "BTC/USD" → ("BTC", "USD")
 func parsePair(pair string) (string, string, error) {
 	for i, c := range pair {
 		if c == '/' {
@@ -272,11 +272,10 @@ func ensureAdminAccount(ctx context.Context, db *pgstore.DB) error {
 	return err
 }
 
-// allAssets lista todos os ativos suportados: moedas fiat (depósito/saque),
-// USDT-sim (quote de trading) e as criptos (só negociáveis).
+// allAssets lista todos os ativos suportados: moedas fiat de cotação
+// (depósito/saque + lado QUOTE dos pares) e as criptos (só negociáveis).
 var allAssets = []string{
-	"USD", "BRL", "EUR", "GBP", // moedas fiat (ativos reais de depósito/saque)
-	"USDT-sim",
+	"USD", "BRL", "EUR", // moedas fiat de cotação (depósito/saque/troca)
 	"VLT", "BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE", "DOT", "AVAX",
 	"POL", "LINK", "UNI", "LTC", "FIL", "ALGO", "XLM", "NEAR", "ICP", "APT",
 	"ARB", "OP", "INJ", "SEI", "SUI", "TIA", "PEPE", "SHIB", "WIF", "JUP",

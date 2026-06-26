@@ -12,7 +12,7 @@
 //	NODE_PORT       - porta RPC de eleicao (default 9101)
 //	PEERS           - "id:host:port,..." das outras replicas
 //	AMQP_URL        - URL do RabbitMQ (obrigatorio)
-//	PAIRS           - pares suportados, ex.: "VLT/USDT-sim" (default)
+//	PAIRS           - pares suportados, ex.: "BTC/USD,BTC/BRL,BTC/EUR" (default VLT)
 //	WAL_DIR         - diretorio do WAL/snapshots (default ./data/matching).
 //	                  Em producao, aponte para um volume COMPARTILHADO entre as
 //	                  replicas para que a promocao recupere o estado completo.
@@ -87,9 +87,12 @@ func main() {
 		}
 	}()
 
-	// Aguarda os pares subirem antes da primeira eleicao.
-	time.Sleep(5 * time.Second)
-	election.StartElection()
+	// Aguarda os pares subirem antes da primeira eleicao. Em goroutine para nao
+	// travar o boot caso algum peer esteja inalcancavel (dial com timeout).
+	go func() {
+		time.Sleep(5 * time.Second)
+		election.StartElection()
+	}()
 
 	var consumer *messaging.Consumer
 	var consumerMu sync.Mutex
@@ -227,7 +230,7 @@ func loadConfig() config {
 		Port:          envStr("NODE_PORT", "9101"),
 		Peers:         parsePeers(os.Getenv("PEERS")),
 		AMQPURL:       os.Getenv("AMQP_URL"),
-		Pairs:         parsePairs(envStr("PAIRS", "VLT/USDT-sim")),
+		Pairs:         parsePairs(envStr("PAIRS", "VLT/USD,VLT/BRL,VLT/EUR")),
 		WALDir:        envStr("WAL_DIR", "./data/matching"),
 		SnapshotEvery: envInt("SNAPSHOT_EVERY", 100),
 	}

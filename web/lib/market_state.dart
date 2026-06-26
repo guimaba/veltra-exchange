@@ -9,6 +9,7 @@ class MarketCoin {
   final String name;
   final double priceUSD;
   final double priceBRL;
+  final double priceEUR;
   final double change24h;
   final double volume24hUSD;
   final double marketCapUSD;
@@ -18,6 +19,7 @@ class MarketCoin {
     required this.name,
     required this.priceUSD,
     required this.priceBRL,
+    required this.priceEUR,
     required this.change24h,
     required this.volume24hUSD,
     required this.marketCapUSD,
@@ -28,12 +30,25 @@ class MarketCoin {
         name: j['name'] as String? ?? '',
         priceUSD: (j['price_usd'] as num?)?.toDouble() ?? 0,
         priceBRL: (j['price_brl'] as num?)?.toDouble() ?? 0,
+        priceEUR: (j['price_eur'] as num?)?.toDouble() ?? 0,
         change24h: (j['change_24h'] as num?)?.toDouble() ?? 0,
         volume24hUSD: (j['volume_24h_usd'] as num?)?.toDouble() ?? 0,
         marketCapUSD: (j['market_cap_usd'] as num?)?.toDouble() ?? 0,
       );
 
   bool get isUp => change24h >= 0;
+
+  /// Preço na moeda de cotação informada (USD/BRL/EUR). Default USD.
+  double priceForQuote(String quote) {
+    switch (quote) {
+      case 'BRL':
+        return priceBRL;
+      case 'EUR':
+        return priceEUR;
+      default:
+        return priceUSD;
+    }
+  }
 }
 
 class Candle {
@@ -94,8 +109,20 @@ class MarketState extends ChangeNotifier {
     return 5.20;
   }
 
-  /// Converte um valor em USD/USDT para BRL usando a taxa real corrente.
+  /// Converte um valor em USD para BRL usando a taxa real corrente.
   double usdToBRL(num usd) => usd * usdToBrl;
+
+  /// Taxa USD→EUR REAL, derivada dos preços da CoinGecko (priceEUR/priceUSD de
+  /// qualquer moeda). Fallback 0,92 se não houver dados.
+  double get usdToEur {
+    for (final c in _coins) {
+      if (c.priceUSD > 0 && c.priceEUR > 0) return c.priceEUR / c.priceUSD;
+    }
+    return 0.92;
+  }
+
+  /// Converte um valor em USD para EUR usando a taxa real corrente.
+  double usdToEUR(num usd) => usd * usdToEur;
 
   void setSearch(String v) {
     _search = v;

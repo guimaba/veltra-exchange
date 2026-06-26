@@ -228,10 +228,11 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apenas pares com quote USDT-sim são suportados (VLT/USDT-sim + catálogo).
+	// Suportados: pares cotados em uma das moedas fiat (USD/BRL/EUR). Cada cripto
+	// negocia diretamente contra as tres (ex.: BTC/USD, BTC/BRL, BTC/EUR).
 	parsed, _ := exchange.ParsePair(req.Pair) // já validado acima
-	if string(parsed.Quote) != "USDT-sim" {
-		writeError(w, http.StatusBadRequest, "apenas pares com quote USDT-sim sao suportados")
+	if !exchange.IsQuoteAsset(parsed.Quote) {
+		writeError(w, http.StatusBadRequest, "quote nao suportado: use USD, BRL ou EUR")
 		return
 	}
 	baseAsset := string(parsed.Base)
@@ -276,7 +277,8 @@ func (s *Server) handleOrders(w http.ResponseWriter, r *http.Request) {
 			if req.Type == "limit" && price.IsPositive() {
 				refPrice = price
 			} else {
-				refPrice = money.Amount(s.veltra.MarketPriceFor(baseAsset))
+				// Preco de referencia na moeda de cotacao do par (USD/BRL/EUR).
+				refPrice = money.Amount(s.veltra.MarketPriceFor(baseAsset, quoteAsset))
 			}
 			if refPrice.IsPositive() {
 				notional, nerr := money.Notional(refPrice, qty)

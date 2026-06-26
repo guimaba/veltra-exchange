@@ -7,7 +7,7 @@ import (
 	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/money"
 )
 
-var pair = exchange.Pair{Base: exchange.AssetVLT, Quote: exchange.AssetUSDT}
+var pair = exchange.Pair{Base: exchange.AssetVLT, Quote: exchange.AssetUSD}
 
 func mkOrder(id string, side exchange.Side, price, qty string, seq uint64) *exchange.Order {
 	return &exchange.Order{

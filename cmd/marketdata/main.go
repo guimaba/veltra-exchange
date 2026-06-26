@@ -43,10 +43,15 @@ type MarketCoin struct {
 	Name         string  `json:"name"`
 	PriceUSD     float64 `json:"price_usd"`
 	PriceBRL     float64 `json:"price_brl"`
+	PriceEUR     float64 `json:"price_eur"`
 	Change24h    float64 `json:"change_24h"`
 	Volume24hUSD float64 `json:"volume_24h_usd"`
 	MarketCapUSD float64 `json:"market_cap_usd"`
 }
+
+// quoteCurrencies sao as moedas fiat de cotacao: cada cripto e semeada com
+// liquidez em pares contra cada uma delas (BASE/USD, BASE/BRL, BASE/EUR).
+var quoteCurrencies = []string{"USD", "BRL", "EUR"}
 
 // Candle representa uma vela OHLCV de 5 minutos.
 type Candle struct {
@@ -111,16 +116,6 @@ var coinDefs = []coinDef{
 	{"tron", "TRX", "TRON"},
 }
 
-// fiatCoins: moedas fiat expostas como ativos negociáveis (par X/USDT-sim, para
-// converter fiat ↔ USDT no trading). PriceUSD = valor em USDT (USD=1; demais =
-// 1/taxa, espelhando os fiatRates do gateway).
-var fiatCoins = []MarketCoin{
-	{Symbol: "USD", Name: "Dólar Americano", PriceUSD: 1.0, PriceBRL: 5.20},
-	{Symbol: "BRL", Name: "Real Brasileiro", PriceUSD: 1.0 / 5.20, PriceBRL: 1.0},
-	{Symbol: "EUR", Name: "Euro", PriceUSD: 1.0 / 0.92, PriceBRL: 5.20 / 0.92},
-	{Symbol: "GBP", Name: "Libra Esterlina", PriceUSD: 1.0 / 0.79, PriceBRL: 5.20 / 0.79},
-}
-
 // cosmosGeckoID é a referência oculta para derivar o preço VLT.
 const cosmosGeckoID = "cosmos"
 
@@ -144,6 +139,7 @@ const publishCandles = 50
 type geckoPrice struct {
 	USD        float64 `json:"usd"`
 	BRL        float64 `json:"brl"`
+	EUR        float64 `json:"eur"`
 	USD24hVol  float64 `json:"usd_24h_vol"`
 	USD24hChg  float64 `json:"usd_24h_change"`
 	USDMarket  float64 `json:"usd_market_cap"`
@@ -154,7 +150,7 @@ type geckoPrice struct {
 func fetchPrices(ctx context.Context, ids []string) (map[string]geckoPrice, error) {
 	joined := strings.Join(ids, ",")
 	url := fmt.Sprintf(
-		"https://api.coingecko.com/api/v3/simple/price?ids=%s&vs_currencies=usd,brl&include_24hr_change=true&include_24hr_vol=true&include_market_cap=true&precision=full",
+		"https://api.coingecko.com/api/v3/simple/price?ids=%s&vs_currencies=usd,brl,eur&include_24hr_change=true&include_24hr_vol=true&include_market_cap=true&precision=full",
 		joined,
 	)
 
@@ -427,6 +423,7 @@ func (svc *service) tick(ctx context.Context, isFirst bool) error {
 			Name:         cd.name,
 			PriceUSD:     p.USD,
 			PriceBRL:     p.BRL,
+			PriceEUR:     p.EUR,
 			Change24h:    p.USD24hChg,
 			Volume24hUSD: p.USD24hVol,
 			MarketCapUSD: p.USDMarket,
@@ -438,6 +435,7 @@ func (svc *service) tick(ctx context.Context, isFirst bool) error {
 	if hasAtom {
 		vltUSD := atomPrice.USD * vltMultiplier
 		vltBRL := atomPrice.BRL * vltMultiplier
+		vltEUR := atomPrice.EUR * vltMultiplier
 
 		if isFirst {
 			svc.store.initHistory("VLT", vltUSD)
@@ -450,18 +448,13 @@ func (svc *service) tick(ctx context.Context, isFirst bool) error {
 			Name:         "Veltra Token",
 			PriceUSD:     vltUSD,
 			PriceBRL:     vltBRL,
+			PriceEUR:     vltEUR,
 			Change24h:    atomPrice.USD24hChg,
 			Volume24hUSD: 0, // volume VLT não é real
 			MarketCapUSD: 0,
 		})
 	} else {
 		log.Printf("[MarketData] Aviso: preço de cosmos (VLT ref) não encontrado")
-	}
-
-	// Moedas fiat como ativos negociáveis (pares fiat/USDT-sim para conversão).
-	// Preço em USDT (USD=1; demais = 1/taxa). Permite trocar fiat ↔ USDT no trading.
-	for _, f := range fiatCoins {
-		coins = append(coins, f)
 	}
 
 	// Monta mapa de candles para o payload (últimas publishCandles por moeda).
@@ -513,37 +506,59 @@ const liquidityAccount = "liquidity"
 // scaleOf converte um valor decimal (USD) para int64 escalado (money.Scale=1e8).
 func scaleOf(v float64) int64 { return int64(v * 1e8) }
 
+// priceIn retorna o preço da moeda na moeda de cotação informada (USD/BRL/EUR).
+func (c MarketCoin) priceIn(quote string) float64 {
+	switch quote {
+	case "BRL":
+		return c.PriceBRL
+	case "EUR":
+		return c.PriceEUR
+	default:
+		return c.PriceUSD
+	}
+}
+
 // seedLiquidity financia a conta de liquidez e coloca quotes nos dois lados de
-// cada par a partir dos preços de referência. levels níveis por lado.
+// cada par BASE/{USD,BRL,EUR} a partir dos preços de referência por moeda.
 func (svc *service) seedLiquidity(ctx context.Context, coins []MarketCoin) {
 	const (
 		levels         = 3        // níveis de profundidade por lado
-		notionalPerLvl = 25_000.0 // ~USD por nível (define a quantidade)
-		fundUSDT       = 50_000_000.0
+		notionalPerLvl = 25_000.0 // ~unidades da quote por nível (define a quantidade)
+		fundQuote      = 50_000_000.0
 	)
 
-	// 1. Financia a conta de liquidez com USDT-sim e cada ativo base.
-	svc.faucet(ctx, liquidityAccount, "USDT-sim", scaleOf(fundUSDT))
-	for _, c := range coins {
-		// Financia o ativo base com inventário suficiente para os asks.
-		baseQty := (notionalPerLvl * float64(levels) * 4) / c.PriceUSD
-		svc.faucet(ctx, liquidityAccount, c.Symbol, scaleOf(baseQty))
+	// 1. Financia a conta de liquidez com cada moeda de cotação (USD/BRL/EUR)...
+	for _, q := range quoteCurrencies {
+		svc.faucet(ctx, liquidityAccount, q, scaleOf(fundQuote))
 	}
-
-	// 2. Coloca quotes resting por par (BASE/USDT-sim).
+	// ...e com cada ativo base (inventário p/ os asks, dimensionado em USD).
 	for _, c := range coins {
 		if c.PriceUSD <= 0 {
 			continue
 		}
-		pair := c.Symbol + "/USDT-sim"
-		qtyPerLvl := notionalPerLvl / c.PriceUSD
-		for i := 1; i <= levels; i++ {
-			off := 1.0 + float64(i)*0.002 // ±0.2%, 0.4%, 0.6%
-			svc.placeLimit(ctx, pair, "buy", scaleOf(c.PriceUSD/off), scaleOf(qtyPerLvl))
-			svc.placeLimit(ctx, pair, "sell", scaleOf(c.PriceUSD*off), scaleOf(qtyPerLvl))
+		baseQty := (notionalPerLvl * float64(levels) * 4 * float64(len(quoteCurrencies))) / c.PriceUSD
+		svc.faucet(ctx, liquidityAccount, c.Symbol, scaleOf(baseQty))
+	}
+
+	// 2. Coloca quotes resting em cada par BASE/QUOTE, com preço na moeda da quote.
+	pairs := 0
+	for _, c := range coins {
+		for _, q := range quoteCurrencies {
+			px := c.priceIn(q)
+			if px <= 0 {
+				continue
+			}
+			pair := c.Symbol + "/" + q
+			qtyPerLvl := notionalPerLvl / px
+			for i := 1; i <= levels; i++ {
+				off := 1.0 + float64(i)*0.002 // ±0.2%, 0.4%, 0.6%
+				svc.placeLimit(ctx, pair, "buy", scaleOf(px/off), scaleOf(qtyPerLvl))
+				svc.placeLimit(ctx, pair, "sell", scaleOf(px*off), scaleOf(qtyPerLvl))
+			}
+			pairs++
 		}
 	}
-	log.Printf("[MarketData] Liquidez semeada: %d pares, %d níveis/lado", len(coins), levels)
+	log.Printf("[MarketData] Liquidez semeada: %d pares, %d níveis/lado", pairs, levels)
 }
 
 // faucet publica faucet.credit (emissão de saldo virtual) para a conta.

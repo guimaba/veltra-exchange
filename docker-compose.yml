@@ -11,9 +11,10 @@
 #   - WebSocket de eventos .......... ws://localhost:8080/ws
 #   - Painel RabbitMQ Management .... http://localhost:15672  (admin / admin)
 
-# Pares negociados: VLT/USDT-sim (par nativo) + catálogo de 32 ativos contra
-# USDT-sim. TODOS passam pelo matching engine real (CLOB determinístico).
-x-veltra-pairs: &veltra_pairs "USD/USDT-sim,BRL/USDT-sim,EUR/USDT-sim,GBP/USDT-sim,VLT/USDT-sim,BTC/USDT-sim,ETH/USDT-sim,BNB/USDT-sim,SOL/USDT-sim,XRP/USDT-sim,ADA/USDT-sim,DOGE/USDT-sim,DOT/USDT-sim,AVAX/USDT-sim,POL/USDT-sim,LINK/USDT-sim,UNI/USDT-sim,LTC/USDT-sim,FIL/USDT-sim,ALGO/USDT-sim,XLM/USDT-sim,NEAR/USDT-sim,ICP/USDT-sim,APT/USDT-sim,ARB/USDT-sim,OP/USDT-sim,INJ/USDT-sim,SEI/USDT-sim,SUI/USDT-sim,TIA/USDT-sim,PEPE/USDT-sim,SHIB/USDT-sim,WIF/USDT-sim,JUP/USDT-sim,BONK/USDT-sim,TON/USDT-sim,TRX/USDT-sim"
+# Pares negociados: cada cripto (VLT + catálogo de 32 ativos) negocia DIRETO
+# contra as 3 moedas fiat de cotação USD/BRL/EUR. TODOS passam pelo matching
+# engine real (CLOB determinístico). 33 bases × 3 quotes = 99 pares.
+x-veltra-pairs: &veltra_pairs "VLT/USD,VLT/BRL,VLT/EUR,BTC/USD,BTC/BRL,BTC/EUR,ETH/USD,ETH/BRL,ETH/EUR,BNB/USD,BNB/BRL,BNB/EUR,SOL/USD,SOL/BRL,SOL/EUR,XRP/USD,XRP/BRL,XRP/EUR,ADA/USD,ADA/BRL,ADA/EUR,DOGE/USD,DOGE/BRL,DOGE/EUR,DOT/USD,DOT/BRL,DOT/EUR,AVAX/USD,AVAX/BRL,AVAX/EUR,POL/USD,POL/BRL,POL/EUR,LINK/USD,LINK/BRL,LINK/EUR,UNI/USD,UNI/BRL,UNI/EUR,LTC/USD,LTC/BRL,LTC/EUR,FIL/USD,FIL/BRL,FIL/EUR,ALGO/USD,ALGO/BRL,ALGO/EUR,XLM/USD,XLM/BRL,XLM/EUR,NEAR/USD,NEAR/BRL,NEAR/EUR,ICP/USD,ICP/BRL,ICP/EUR,APT/USD,APT/BRL,APT/EUR,ARB/USD,ARB/BRL,ARB/EUR,OP/USD,OP/BRL,OP/EUR,INJ/USD,INJ/BRL,INJ/EUR,SEI/USD,SEI/BRL,SEI/EUR,SUI/USD,SUI/BRL,SUI/EUR,TIA/USD,TIA/BRL,TIA/EUR,PEPE/USD,PEPE/BRL,PEPE/EUR,SHIB/USD,SHIB/BRL,SHIB/EUR,WIF/USD,WIF/BRL,WIF/EUR,JUP/USD,JUP/BRL,JUP/EUR,BONK/USD,BONK/BRL,BONK/EUR,TON/USD,TON/BRL,TON/EUR,TRX/USD,TRX/BRL,TRX/EUR"
 
 services:
   # -------------------------------------------------------------

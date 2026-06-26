@@ -11,11 +11,20 @@ package main
 
 import (
 	"log"
+	"net"
 	"net/rpc"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/guimaba/blockchain_sistemasDistribuidos/pkg/bully"
 )
+
+// dialTimeout limita a conexao RPC a um peer. Sem isso, um peer cujo SYN e
+// dropado (ex.: Security Group/host inexistente no ECS) faz rpc.Dial bloquear
+// pelo timeout do SO (~75s+), travando toda a eleicao e deixando o cluster
+// SEM LIDER por minutos. Com timeout curto, um no solitario se auto-elege rapido.
+const dialTimeout = 2 * time.Second
 
 type ElectionArgs struct {
 	FromID int
@@ -28,6 +37,12 @@ type ElectionReply struct {
 // Election expoe os metodos RPC do algoritmo Bully sobre um bully.Node.
 type Election struct {
 	node *bully.Node
+
+	// inFlight evita eleicoes sobrepostas: Elect, heartbeatLoop e o boot podem
+	// disparar StartElection concorrentemente. Sem guarda, viram um enxame de
+	// goroutines competindo e gerando flapping de SetLeader(-1).
+	mu       sync.Mutex
+	inFlight bool
 }
 
 func NewElection(node *bully.Node) *Election {
@@ -42,7 +57,11 @@ func (e *Election) dialPeer(peerID int) (*rpc.Client, error) {
 	if !strings.Contains(addr, ":") {
 		addr = "localhost:" + addr
 	}
-	return rpc.Dial("tcp", addr)
+	conn, err := net.DialTimeout("tcp", addr, dialTimeout)
+	if err != nil {
+		return nil, err
+	}
+	return rpc.NewClient(conn), nil
 }
 
 // Elect: um peer de ID menor pediu eleicao; respondemos OK e disparamos a nossa.
@@ -67,9 +86,31 @@ func (e *Election) Heartbeat(args bool, reply *bool) error {
 }
 
 // StartElection inicia o algoritmo Bully: contata peers de ID maior; se nenhum
-// responder, se autoproclama coordenador.
+// responder, se autoproclama coordenador. E reentrante-safe: chamadas
+// concorrentes enquanto uma eleicao roda sao descartadas.
 func (e *Election) StartElection() {
+	e.mu.Lock()
+	if e.inFlight {
+		e.mu.Unlock()
+		return
+	}
+	e.inFlight = true
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		e.inFlight = false
+		e.mu.Unlock()
+	}()
+
 	e.node.SetState(bully.StateElection)
+
+	// No solitario (sem peers configurados, ex.: task unica no ECS) vira lider
+	// imediatamente, sem depender de resolver enderecos inexistentes.
+	if len(e.node.Peers) == 0 {
+		e.ProclaimCoordinator()
+		return
+	}
+
 	higher := e.node.GetPeersHigherThan(e.node.ID)
 
 	if len(higher) == 0 {

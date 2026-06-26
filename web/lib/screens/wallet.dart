@@ -10,6 +10,25 @@ import '../trading_state.dart';
 import 'deposit.dart';
 import 'withdraw.dart';
 
+/// Converte o saldo de um ativo (cripto ou fiat) para BRL para o portfólio.
+/// Fiat: USD/EUR são convertidas pela taxa real; BRL é 1:1.
+double _toBRL(AssetBalance b, MarketState market) {
+  final coin = market.coins.where((c) => c.symbol == b.asset).firstOrNull;
+  if (coin != null) return b.balanceDecimal * coin.priceBRL;
+  switch (b.asset) {
+    case 'BRL':
+      return b.balanceDecimal;
+    case 'USD':
+      return market.usdToBRL(b.balanceDecimal);
+    case 'EUR':
+      // EUR → USD → BRL (usa taxas reais correntes).
+      final usdPerEur = market.usdToEur == 0 ? 0.0 : 1 / market.usdToEur;
+      return market.usdToBRL(b.balanceDecimal * usdPerEur);
+    default:
+      return 0.0;
+  }
+}
+
 class WalletScreen extends StatelessWidget {
   const WalletScreen();
 
@@ -24,12 +43,7 @@ class WalletScreen extends StatelessWidget {
     // Calcula portfolio total em BRL
     double totalBRL = 0;
     for (final b in bal.nonZero) {
-      final coin = market.coins.where((c) => c.symbol == b.asset).firstOrNull;
-      if (coin != null) {
-        totalBRL += b.balanceDecimal * coin.priceBRL;
-      } else if (b.asset == 'USDT-sim') {
-        totalBRL += market.usdToBRL(b.balanceDecimal);
-      }
+      totalBRL += _toBRL(b, market);
     }
 
     return RefreshIndicator(
@@ -115,9 +129,7 @@ class _PortfolioHeader extends StatelessWidget {
       const SizedBox(height: 14),
       // Breakdown pills
       Wrap(spacing: 12, runSpacing: 6, children: balances.take(4).map((b) {
-        final coin = market.coins.where((c) => c.symbol == b.asset).firstOrNull;
-        final brl = coin != null ? b.balanceDecimal * coin.priceBRL
-            : b.asset == 'USDT-sim' ? market.usdToBRL(b.balanceDecimal) : 0.0;
+        final brl = _toBRL(b, market);
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(color: Colors.white.withOpacity(0.06),
@@ -193,8 +205,7 @@ class _AssetGrid extends StatelessWidget {
   Widget build(BuildContext context) => Column(
     children: balances.map((b) {
       final coin = market.coins.where((c) => c.symbol == b.asset).firstOrNull;
-      final brl  = coin != null ? b.balanceDecimal * coin.priceBRL
-          : b.asset == 'USDT-sim' ? b.balanceDecimal * 5.0 : 0.0;
+      final brl  = _toBRL(b, market);
       return _AssetRow(bal: b, brl: brl, coin: coin);
     }).toList(),
   );

@@ -7,7 +7,7 @@ import '../fmt.dart';
 import '../theme.dart';
 
 /// Saque simulado. Só moedas FIAT que o usuário possui podem ser sacadas (1:1,
-/// na própria moeda). Cripto/USDT não se saca — converte na aba de trading.
+/// na própria moeda). Cripto não se saca — vende por fiat na aba de trading.
 class WithdrawDialog extends StatefulWidget {
   const WithdrawDialog({super.key});
 
@@ -105,7 +105,7 @@ class _WithdrawDialogState extends State<WithdrawDialog> {
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(color: kSurface2, borderRadius: BorderRadius.circular(10)),
             child: const Text(
-              'Você não tem moeda fiat para sacar.\nConverta cripto/USDT em uma moeda (R\$, US\$, €, £) na aba de Trading primeiro.',
+              'Você não tem moeda fiat para sacar.\nVenda cripto por uma moeda (R\$, US\$, €) na aba de Trading primeiro.',
               textAlign: TextAlign.center, style: TextStyle(color: kTxtSub, fontSize: 12, height: 1.4)),
           )
         else ...[

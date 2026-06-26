@@ -629,9 +629,9 @@ class _UserRow extends StatelessWidget {
   void _showManage(BuildContext context, String username, bool isAdmin,
       List<Map<String, dynamic>> bals) {
     final amtCtrl = TextEditingController(text: '1000');
-    String asset = 'USDT-sim';
+    String asset = 'USD';
     final assetOptions = <String>{
-      'USDT-sim', 'VLT', 'BTC', 'ETH', 'BNB', 'SOL',
+      'USD', 'BRL', 'EUR', 'VLT', 'BTC', 'ETH', 'BNB', 'SOL',
       ...bals.map((b) => b['asset'] as String? ?? '').where((a) => a.isNotEmpty),
     }.toList();
     showDialog<void>(
@@ -722,7 +722,7 @@ class _UserRow extends StatelessWidget {
 
   void _showFaucet(BuildContext context, String username) {
     final amtCtrl = TextEditingController(text: '10000');
-    String asset = 'USDT-sim';
+    String asset = 'USD';
     showDialog<void>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -739,7 +739,7 @@ class _UserRow extends StatelessWidget {
               dropdownColor: kSurface2,
               style: const TextStyle(color: kTxt),
               decoration: const InputDecoration(labelText: 'Ativo'),
-              items: ['USDT-sim', 'VLT', 'BTC', 'ETH', 'BNB', 'SOL']
+              items: ['USD', 'BRL', 'EUR', 'VLT', 'BTC', 'ETH', 'BNB', 'SOL']
                   .map((a) => DropdownMenuItem(value: a, child: Text(a)))
                   .toList(),
               onChanged: (v) => ss(() => asset = v ?? asset),
@@ -798,7 +798,7 @@ class _FaucetTabState extends State<_FaucetTab> {
   final _formKey = GlobalKey<FormState>();
   final _acctCtrl = TextEditingController();
   final _amtCtrl = TextEditingController(text: '10000');
-  String _asset = 'USDT-sim';
+  String _asset = 'USD';
   bool _busy = false;
   String? _result;
   bool _ok = false;
@@ -861,7 +861,7 @@ class _FaucetTabState extends State<_FaucetTab> {
                     dropdownColor: kSurface2,
                     style: const TextStyle(color: kTxt),
                     decoration: const InputDecoration(labelText: 'Ativo'),
-                    items: ['USDT-sim', 'VLT', 'BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'ADA']
+                    items: ['USD', 'BRL', 'EUR', 'VLT', 'BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'ADA']
                         .map((a) => DropdownMenuItem(value: a, child: Text(a)))
                         .toList(),
                     onChanged: (v) => setState(() => _asset = v ?? _asset),

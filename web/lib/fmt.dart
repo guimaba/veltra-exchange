@@ -82,7 +82,6 @@ const kFiatCurrencies = <FiatCurrency>[
   FiatCurrency('BRL', 'R\$', 5.20),
   FiatCurrency('USD', '\$', 1.00),
   FiatCurrency('EUR', '€', 0.92),
-  FiatCurrency('GBP', '£', 0.79),
 ];
 
 FiatCurrency fiatByCode(String code) =>
